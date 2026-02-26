@@ -1,0 +1,13 @@
+/project_root
+  ├── /core
+  │    ├── models.py           # (Data Structures) רק מבני נתונים (DTOs)
+  │    ├── data_loader.py      # (Data Layer) אחראי להביא מידע מה-DB
+  │
+  ├── /logic
+  │    ├── decision_engine.py  # (Brain) רק מתמטיקה ולוגיקה של ציונים
+  │
+  ├── /services
+  │    ├── llm_service.py      # (Voice) אחראי על התקשורת עם Groq/OpenAI
+  │    ├── fcm_service.py      # (Hands) אחראי על השליחה הטכנית לטלפון
+  │
+  └── main_orchestrator.py     # (Manager) המנהל שמחבר את הכל
