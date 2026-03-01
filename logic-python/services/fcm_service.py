@@ -30,7 +30,12 @@ class FCMService:
             raise ValueError(
                 "Missing SERVICE_ACCOUNT_JSON. Provide service_account_json=... or set env var SERVICE_ACCOUNT_JSON."
             )
-
+        
+        # Fix path: ensure it's a proper file path
+        if not os.path.isabs(self.service_account_json):
+            # If relative path, make it absolute from current directory
+            self.service_account_json = os.path.join(os.path.dirname(__file__), self.service_account_json)
+        
         self.default_title = default_title or os.getenv("FCM_DEFAULT_TITLE", "Lexi")
         self.dry_run = dry_run
 

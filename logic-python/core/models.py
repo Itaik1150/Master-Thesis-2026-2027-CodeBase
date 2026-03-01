@@ -8,8 +8,8 @@ class UserContext:
     user_id: str
     name: str
     fcm_token: str
-    last_interaction: datetime
-    interests: List[str]
+    # last_interaction: datetime
+    # interests: List[str]
 
 
 @dataclass

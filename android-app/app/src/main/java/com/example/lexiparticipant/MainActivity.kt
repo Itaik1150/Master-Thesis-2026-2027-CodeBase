@@ -42,7 +42,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun AppRoot() {
-    val fixedUrl = "http://localhost:3000/e/695948af6ac218de3379a861"
+    val fixedUrl = "http://10.0.2.2:3000/e/695948af6ac218de3379a861"
     ChatScreen(url = fixedUrl)
 }
 
