@@ -1,2 +1,10 @@
-.env
-lexi-72330-firebase-adminsdk-fbsvc-49c2c6ee82.json
+# Firebase credentials (keep private)
+*-firebase-adminsdk*.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE files
+.vscode/
+.idea/
