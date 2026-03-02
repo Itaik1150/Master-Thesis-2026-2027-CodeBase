@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from typing import List
 from core.models import UserContext
 from utils.mongodb_client import mongodb_client
 
@@ -23,12 +24,15 @@ class UserDataLoader:
             interests=["Sports", "Music"],  # Default interests, could be enhanced later
         )
     
-    def get_users_with_fcm_tokens(self):
-        """Get all users with valid FCM tokens"""
+    def get_users_with_fcm_tokens(self) -> List[UserContext]:
+        """Get only proactive users with valid FCM tokens"""
         users_data = mongodb_client.get_users_with_fcm_tokens()
         
+        # Filter: Only proactive users
+        proactive_users = [user for user in users_data if user.get('isProactive', False)]
+        
         users = []
-        for user_data in users_data:
+        for user_data in proactive_users:
             user_context = UserContext(
                 user_id=user_data.get('_id'),
                 name=user_data.get('username'),
