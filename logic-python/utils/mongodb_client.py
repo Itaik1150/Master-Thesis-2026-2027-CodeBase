@@ -96,6 +96,29 @@ class MongoDBClient:
         except Exception as e:
             print(f"Error fetching user {user_id}: {e}")
             return None
+    
+    def update_user_first_message(self, user_id: str, custom_message: str) -> bool:
+        """Update user's agent firstChatSentence for prompt injection"""
+        try:
+            if self.db is None:
+                print("Database not connected")
+                return False
+                
+            result = self.db[self.users_collection].update_one(
+                {"_id": user_id},
+                {"$set": {"agent.firstChatSentence": custom_message}}
+            )
+            
+            if result.modified_count > 0:
+                print(f"Updated first message for user {user_id}")
+                return True
+            else:
+                print(f"No user found or no changes made for {user_id}")
+                return False
+                
+        except Exception as e:
+            print(f"Error updating first message for user {user_id}: {e}")
+            return False
 
 # Singleton instance
 mongodb_client = MongoDBClient()
