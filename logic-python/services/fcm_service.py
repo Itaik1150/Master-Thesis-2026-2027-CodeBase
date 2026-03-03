@@ -42,7 +42,14 @@ class FCMService:
         # Initialize Firebase only once
         if not firebase_admin._apps:
             cred = credentials.Certificate(self.service_account_json)
-            firebase_admin.initialize_app(cred)
+            
+            # Initialize Firebase app with default name (not specifying name)
+            firebase_admin.initialize_app(cred, {
+                'projectId': 'lexi-72330',
+            })
+            print(f"✅ Firebase initialized with default app")
+        else:
+            print(f"✅ Firebase already initialized")
 
     def send_to_user(self, user: UserContext, body: str, title: Optional[str] = None) -> Optional[str]:
         """
@@ -58,6 +65,11 @@ class FCMService:
         """
         if not token:
             raise ValueError("FCM token is empty.")
+        
+        # Validate token format
+        if len(token) < 100:
+            print(f"⚠️ FCM token seems too short: {len(token)} chars")
+            raise ValueError(f"FCM token appears invalid (too short: {len(token)} chars)")
 
         final_title = title or self.default_title
 
@@ -75,5 +87,21 @@ class FCMService:
             print(f"🚀 FCM Service: Sent! ID: {resp}")
             return resp
         except Exception as e:
-            print(f"❌ FCM Error: {e}")
+            error_msg = str(e)
+            print(f"❌ FCM Error: {error_msg}")
+            
+            # Provide specific guidance based on error type
+            if "registration token" in error_msg.lower():
+                print("💡 Token Issue: The FCM token may be expired or invalid")
+                print("   - User may need to restart the app")
+                print("   - Token might be from different Firebase project")
+            elif "not found" in error_msg.lower():
+                print("💡 Project Issue: Firebase project configuration problem")
+                print("   - Check service account file")
+                print("   - Verify project ID matches mobile app")
+            elif "unauthenticated" in error_msg.lower():
+                print("💡 Auth Issue: Firebase service account problem")
+                print("   - Check service account permissions")
+                print("   - Verify service account file is valid")
+            
             raise
