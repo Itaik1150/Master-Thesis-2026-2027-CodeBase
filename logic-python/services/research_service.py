@@ -1,165 +1,372 @@
 """
-Research Service - Proactive Notification Orchestration
+Minimal Research Service - Basic injection and FCM functionality
 """
 import os
-from datetime import datetime
-from typing import List, Optional
-from core.models import UserContext
-from core.data_loader import UserDataLoader
-from services.fcm_service import FCMService
 from utils.mongodb_client import mongodb_client
+from services.fcm_service import FCMService
 
 class ResearchService:
     """
-    Orchestrates proactive research experiments including:
-    - Random user assignment (isProactive)
-    - Prompt injection for research
-    - FCM notification delivery
+    Minimal research service for testing proactive loop
     """
     
     def __init__(self):
-        """Initialize research service with dependencies"""
-        self.data_loader = UserDataLoader()
-        self.fcm_service = FCMService()
+        """Initialize research service"""
+        # Provide the correct service account file path
+        service_account_path = os.path.join(os.path.dirname(__file__), 'lexi-72330-firebase-adminsdk-fbsvc-49c2c6ee82.json')
+        self.fcm_service = FCMService(service_account_json=service_account_path, dry_run=False)
     
-    def get_proactive_users(self) -> List[UserContext]:
-        """Get all proactive users with FCM tokens"""
-        return self.data_loader.get_users_with_fcm_tokens()
-    
-    def inject_prompt_and_notify(self, user_id: str, custom_message: str, 
-                                notification_title: str = "Research Update",
-                                notification_body: str = "Check your conversation!") -> Optional[str]:
+    def inject_prompt(self, user_id: str, message: str) -> bool:
         """
-        Inject custom prompt and send FCM notification
+        Inject message into agent.firstChatSentence
         
         Args:
             user_id: MongoDB user ID
-            custom_message: New firstChatSentence for prompt injection
-            notification_title: FCM notification title
-            notification_body: FCM notification body
+            message: Simple string message to inject
             
         Returns:
-            FCM message ID if successful, None otherwise
+            True if successful, False otherwise
         """
-        print(f"=== Prompt Injection Research ===")
-        print(f"Target User: {user_id}")
-        print(f"Custom Message: {custom_message}")
-        
-        # 1. Update user's agent firstChatSentence
-        injection_success = mongodb_client.update_user_first_message(user_id, custom_message)
-        
-        if injection_success:
-            print(f"+ Prompt injection successful for user {user_id}")
+        try:
+            if not mongodb_client.connect():
+                print("❌ Failed to connect to MongoDB")
+                return False
             
-            # 2. Get user context for FCM
-            user_data = mongodb_client.get_user_context(user_id)
-            if not user_data or not user_data.get('fcmToken'):
-                print(f"X No FCM token found for user {user_id}")
-                return None
-            
-            user_context = UserContext(
-                user_id=user_data.get('_id'),
-                name=user_data.get('username', 'Unknown'),
-                fcm_token=user_data.get('fcmToken', '')
+            # Update agent.firstChatSentence with simple string
+            result = mongodb_client.db[mongodb_client.users_collection].update_one(
+                {"_id": user_id},
+                {"$set": {"agent.firstChatSentence": message}}
             )
             
-            # 3. Send FCM notification
-            message_id = self.fcm_service.send_to_user(
-                user=user_context,
-                title=notification_title,
-                body=notification_body
-            )
-            
-            if message_id:
-                print(f"+ FCM notification sent! Message ID: {message_id}")
-                return message_id
+            # Use matched_count to detect if user was found and updated
+            if result.matched_count > 0:
+                if result.modified_count > 0:
+                    print(f"✅ Successfully injected message for user {user_id}")
+                    print(f"📝 Message: '{message}'")
+                else:
+                    print(f"ℹ️ Message already exists for user {user_id} (no change needed)")
+                return True
             else:
-                print("X FCM notification failed")
-                return None
-        else:
-            print(f"X Prompt injection failed for user {user_id}")
-            return None
+                print(f"❌ User {user_id} not found in database")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error injecting prompt: {e}")
+            return False
+        finally:
+            mongodb_client.disconnect()
     
-    def run_proactive_experiment(self, custom_message: str) -> dict:
+    def send_notification(self, user_id: str, message: str) -> bool:
         """
-        Run proactive experiment on all proactive users
+        Send FCM notification to user
         
         Args:
-            custom_message: Custom prompt to inject
+            user_id: MongoDB user ID
+            message: Message content for notification
             
         Returns:
-            Experiment results summary
+            True if successful, False otherwise
         """
-        print(f"=== Running Proactive Experiment ===")
-        print(f"Custom Message: {custom_message}")
-        
-        proactive_users = self.get_proactive_users()
-        
-        if not proactive_users:
-            return {
-                "total_users": 0,
-                "successful_injections": 0,
-                "successful_notifications": 0,
-                "message": "No proactive users found with FCM tokens"
-            }
-        
-        print(f"Found {len(proactive_users)} proactive users")
-        
-        successful_injections = 0
-        successful_notifications = 0
-        
-        for user in proactive_users:
-            print(f"\nProcessing user: {user.name}")
+        try:
+            # Get user data from MongoDB
+            if not mongodb_client.connect():
+                print("❌ Failed to connect to MongoDB")
+                return False
             
-            message_id = self.inject_prompt_and_notify(
-                user_id=user.user_id,
-                custom_message=custom_message,
-                notification_title="Research Experiment Active",
-                notification_body=f"Hi {user.name}! Your conversation has been updated with a research prompt."
+            user_data = mongodb_client.db[mongodb_client.users_collection].find_one({"_id": user_id})
+            
+            if not user_data:
+                print(f"❌ User {user_id} not found")
+                return False
+            
+            fcm_token = user_data.get('fcmToken', '')
+            username = user_data.get('username', 'Unknown')
+            
+            if not fcm_token:
+                print(f"❌ No FCM token for user {username}")
+                return False
+            
+            # Send FCM notification
+            notification_title = "📰 New Message Available"
+            notification_body = f"Hi {username}! You have a new message waiting."
+            
+            result = self.fcm_service.send_to_token(
+                token=fcm_token,
+                body=f"{notification_title}: {notification_body}"
             )
             
-            if message_id:
-                successful_injections += 1
-                successful_notifications += 1
-        
-        results = {
-            "total_users": len(proactive_users),
-            "successful_injections": successful_injections,
-            "successful_notifications": successful_notifications,
-            "timestamp": datetime.now().isoformat(),
-            "custom_message": custom_message
-        }
-        
-        print(f"\n=== Experiment Results ===")
-        print(f"Total Users: {results['total_users']}")
-        print(f"Successful Injections: {results['successful_injections']}")
-        print(f"Successful Notifications: {results['successful_notifications']}")
-        
-        return results
+            if result:
+                print(f"✅ FCM notification sent to {username}")
+                return True
+            else:
+                print(f"❌ Failed to send FCM to {username}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error sending notification: {e}")
+            return False
+        finally:
+            mongodb_client.disconnect()
     
-    def get_research_statistics(self) -> dict:
-        """Get current research statistics"""
-        # Get all users with FCM tokens
-        all_users_data = mongodb_client.get_users_with_fcm_tokens()
+    def get_all_proactive_users(self):
+        """
+        Get all proactive users with FCM tokens
         
-        if not all_users_data:
-            return {
-                "total_users_with_fcm": 0,
-                "proactive_users": 0,
-                "control_users": 0,
-                "proactive_percentage": 0
+        Returns:
+            List of proactive users with FCM tokens
+        """
+        try:
+            if not mongodb_client.connect():
+                print("❌ Failed to connect to MongoDB")
+                return []
+            
+            # Find all users with isProactive: true and fcmToken exists
+            proactive_users = list(mongodb_client.db[mongodb_client.users_collection].find({
+                "isProactive": True,
+                "fcmToken": {"$exists": True, "$ne": ""}
+            }))
+            
+            print(f"📊 Found {len(proactive_users)} proactive users with FCM tokens")
+            return proactive_users
+            
+        except Exception as e:
+            print(f"❌ Error fetching proactive users: {e}")
+            return []
+        finally:
+            mongodb_client.disconnect()
+    
+    def run_proactive_cycle(self, message: str) -> dict:
+        """
+        Run complete proactive cycle: inject message and send FCM to all proactive users
+        
+        Args:
+            message: Message to inject and send
+            
+        Returns:
+            Dictionary with results
+        """
+        try:
+            # Get all proactive users
+            proactive_users = self.get_all_proactive_users()
+            
+            if not proactive_users:
+                print("❌ No proactive users found")
+                return {
+                    "success": False,
+                    "message": "No proactive users found",
+                    "injected_count": 0,
+                    "notification_count": 0
+                }
+            
+            print(f"🚀 Starting proactive cycle for {len(proactive_users)} users...")
+            print(f"📝 Message: '{message}'")
+            
+            injected_count = 0
+            notification_count = 0
+            
+            # Process each user
+            for user in proactive_users:
+                user_id = user['_id']
+                username = user.get('username', 'Unknown')
+                
+                print(f"\n👤 Processing user: {username}")
+                
+                # Inject message
+                injection_success = self.inject_prompt(user_id, message)
+                if injection_success:
+                    injected_count += 1
+                    print(f"✅ Injection successful for {username}")
+                else:
+                    print(f"❌ Injection failed for {username}")
+                
+                # Send notification
+                notification_success = self.send_notification(user_id, message)
+                if notification_success:
+                    notification_count += 1
+                    print(f"✅ FCM sent to {username}")
+                else:
+                    print(f"❌ FCM failed for {username}")
+            
+            results = {
+                "success": True,
+                "message": f"Processed {len(proactive_users)} proactive users",
+                "total_users": len(proactive_users),
+                "injected_count": injected_count,
+                "notification_count": notification_count
             }
+            
+            print(f"\n🎯 Cycle Complete!")
+            print(f"📊 Results: {injected_count}/{len(proactive_users)} injected, {notification_count}/{len(proactive_users)} notifications sent")
+            
+            return results
+            
+        except Exception as e:
+            print(f"❌ Error in proactive cycle: {e}")
+            return {
+                "success": False,
+                "message": f"Error: {e}",
+                "injected_count": 0,
+                "notification_count": 0
+            }
+    
+    def diagnose_user(self, user_id: str):
+        """
+        Diagnose user data and configuration issues
         
-        proactive_count = sum(1 for user in all_users_data if user.get('isProactive', False))
-        control_count = len(all_users_data) - proactive_count
-        
-        return {
-            "total_users_with_fcm": len(all_users_data),
-            "proactive_users": proactive_count,
-            "control_users": control_count,
-            "proactive_percentage": round((proactive_count / len(all_users_data)) * 100, 2),
-            "timestamp": datetime.now().isoformat()
-        }
+        Args:
+            user_id: MongoDB user ID
+        """
+        try:
+            if not mongodb_client.connect():
+                print("❌ Failed to connect to MongoDB")
+                return
+            
+            user_data = mongodb_client.db[mongodb_client.users_collection].find_one({"_id": user_id})
+            
+            if not user_data:
+                print(f"❌ User {user_id} not found in database")
+                return
+            
+            print(f"\n🔍 User Diagnosis for: {user_data.get('username', 'Unknown')}")
+            print(f"📋 User ID: {user_id}")
+            print(f"📱 FCM Token: {'✅ Present' if user_data.get('fcmToken') else '❌ Missing'}")
+            print(f"🔔 isProactive: {user_data.get('isProactive', False)}")
+            
+            # Check agent structure
+            agent = user_data.get('agent', {})
+            print(f"🤖 Agent exists: {'✅ Yes' if agent else '❌ No'}")
+            
+            if agent:
+                print(f"💬 firstChatSentence: '{agent.get('firstChatSentence', 'N/A')}'")
+                print(f"📝 Agent fields: {list(agent.keys())}")
+            
+            # Check FCM token format
+            fcm_token = user_data.get('fcmToken', '')
+            if fcm_token:
+                print(f"📱 FCM Token length: {len(fcm_token)}")
+                print(f"📱 FCM Token format: {'✅ Valid length' if len(fcm_token) > 50 else '❌ Too short'}")
+            
+        except Exception as e:
+            print(f"❌ Error diagnosing user: {e}")
+        finally:
+            mongodb_client.disconnect()
+    
+    def test_fcm_connection(self):
+        """Test FCM service connection and configuration"""
+        try:
+            print(f"\n🔍 FCM Service Diagnosis")
+            print(f"📱 Dry run mode: {self.fcm_service.dry_run}")
+            
+            # Test with a dummy token
+            test_token = "test_token_12345"
+            test_title = "Test Notification"
+            test_body = "This is a test message"
+            
+            print(f"🧪 Testing FCM with dummy token...")
+            
+            try:
+                result = self.fcm_service.send_to_token(test_token, test_title, test_body)
+                print(f"✅ FCM service initialized successfully")
+                print(f"📊 Test result: {result}")
+            except Exception as e:
+                print(f"❌ FCM service error: {e}")
+                print(f"🔧 Check Firebase service account configuration")
+                
+        except Exception as e:
+            print(f"❌ Error testing FCM: {e}")
+    
+    def check_user_token_distribution(self):
+        """Check distribution of users with and without FCM tokens"""
+        try:
+            if not mongodb_client.connect():
+                print("❌ Failed to connect to MongoDB")
+                return
+            
+            print(f"\n🔍 User Token Distribution Analysis")
+            
+            # Count all users
+            total_users = mongodb_client.db[mongodb_client.users_collection].count_documents({})
+            print(f"📊 Total users: {total_users}")
+            
+            # Count proactive users
+            proactive_users = mongodb_client.db[mongodb_client.users_collection].count_documents({"isProactive": True})
+            print(f"🔔 Proactive users: {proactive_users}")
+            
+            # Count users with FCM tokens
+            users_with_tokens = mongodb_client.db[mongodb_client.users_collection].count_documents({
+                "fcmToken": {"$exists": True, "$ne": ""}
+            })
+            print(f"📱 Users with FCM tokens: {users_with_tokens}")
+            
+            # Count proactive users with FCM tokens
+            proactive_with_tokens = mongodb_client.db[mongodb_client.users_collection].count_documents({
+                "isProactive": True,
+                "fcmToken": {"$exists": True, "$ne": ""}
+            })
+            print(f"🎯 Proactive users with tokens: {proactive_with_tokens}")
+            
+            # Show sample users without tokens
+            users_without_tokens = list(mongodb_client.db[mongodb_client.users_collection].find({
+                "fcmToken": {"$exists": False}
+            }).limit(3))
+            
+            if users_without_tokens:
+                print(f"\n📋 Sample users WITHOUT FCM tokens:")
+                for user in users_without_tokens:
+                    username = user.get('username', 'Unknown')
+                    is_proactive = user.get('isProactive', False)
+                    user_id = user.get('_id', 'Unknown')
+                    print(f"   👤 {username} (ID: {user_id}) - Proactive: {is_proactive}")
+            
+            # Show sample users with tokens
+            users_with_tokens_list = list(mongodb_client.db[mongodb_client.users_collection].find({
+                "fcmToken": {"$exists": True, "$ne": ""}
+            }).limit(3))
+            
+            if users_with_tokens_list:
+                print(f"\n📋 Sample users WITH FCM tokens:")
+                for user in users_with_tokens_list:
+                    username = user.get('username', 'Unknown')
+                    is_proactive = user.get('isProactive', False)
+                    user_id = user.get('_id', 'Unknown')
+                    token_length = len(user.get('fcmToken', ''))
+                    print(f"   👤 {username} (ID: {user_id}) - Proactive: {is_proactive} - Token: {token_length} chars")
+                
+        except Exception as e:
+            print(f"❌ Error checking token distribution: {e}")
+        finally:
+            mongodb_client.disconnect()
+    
+    def check_mongodb_schema(self):
+        try:
+            if not mongodb_client.connect():
+                print("❌ Failed to connect to MongoDB")
+                return
+            
+            print(f"\n🔍 MongoDB Schema Check")
+            print(f"📊 Database: {mongodb_client.db_name}")
+            print(f"📋 Collection: {mongodb_client.users_collection}")
+            
+            # Check a sample user
+            sample_user = mongodb_client.db[mongodb_client.users_collection].find_one()
+            
+            if sample_user:
+                print(f"👤 Sample user: {sample_user.get('username', 'Unknown')}")
+                print(f"📋 User fields: {list(sample_user.keys())}")
+                
+                agent = sample_user.get('agent', {})
+                if agent:
+                    print(f"🤖 Agent fields: {list(agent.keys())}")
+                    print(f"💬 firstChatSentence type: {type(agent.get('firstChatSentence', 'N/A'))}")
+                else:
+                    print(f"❌ No agent field found")
+            else:
+                print(f"❌ No users found in collection")
+                
+        except Exception as e:
+            print(f"❌ Error checking schema: {e}")
+        finally:
+            mongodb_client.disconnect()
 
 # Singleton instance
 research_service = ResearchService()
