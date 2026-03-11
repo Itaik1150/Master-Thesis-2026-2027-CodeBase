@@ -2,8 +2,15 @@
 Minimal Research Service - Basic injection and FCM functionality
 """
 import os
+import uuid
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional
+from bson import ObjectId
+
 from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
+from services.news_service import NewsService
+from services.llm_service import ProactiveLogic
 
 class ResearchService:
     """
@@ -15,6 +22,16 @@ class ResearchService:
         # Provide the correct service account file path
         service_account_path = os.path.join(os.path.dirname(__file__), 'lexi-72330-firebase-adminsdk-fbsvc-49c2c6ee82.json')
         self.fcm_service = FCMService(service_account_json=service_account_path, dry_run=False)
+        
+        # Initialize new services
+        self.news_service = NewsService()
+        self.llm_service = ProactiveLogic()
+        
+        # Timing and caching attributes
+        self.last_news_fetch = None
+        self.news_fetch_interval = 30 * 60  # 30 minutes in seconds
+        self.cached_headlines = []
+        self.headline_cache_expiry = None
     
     def inject_prompt(self, user_id: str, message: str) -> bool:
         """
@@ -33,8 +50,11 @@ class ResearchService:
                 return False
             
             # Update agent.firstChatSentence with simple string
+            print(f"🔍 Looking for user with ID: {user_id}")
+            print(f"🔍 Type of user_id: {type(user_id)}")
+            
             result = mongodb_client.db[mongodb_client.users_collection].update_one(
-                {"_id": user_id},
+                {"_id": ObjectId(user_id)},
                 {"$set": {"agent.firstChatSentence": message}}
             )
             
@@ -367,6 +387,234 @@ class ResearchService:
             print(f"❌ Error checking schema: {e}")
         finally:
             mongodb_client.disconnect()
+
+    # === NEW PROACTIVE CYCLE METHODS ===
+    
+    def should_fetch_news(self) -> bool:
+        """Check if enough time has passed since last news fetch"""
+        if not self.last_news_fetch:
+            return True
+        return (datetime.now() - self.last_news_fetch).total_seconds() > self.news_fetch_interval
+    
+    def get_fresh_headlines(self) -> List[str]:
+        """Get fresh headlines or return cached if still valid"""
+        if self.should_fetch_news():
+            print("📰 Fetching fresh headlines...")
+            headlines_data = self.news_service.fetch_israel_headlines(max_results=5)
+            self.cached_headlines = [h['title'] for h in headlines_data]
+            self.last_news_fetch = datetime.now()
+            self.headline_cache_expiry = datetime.now() + timedelta(hours=1)
+            print(f"✅ Fetched {len(self.cached_headlines)} fresh headlines")
+        else:
+            print(f"📋 Using cached headlines ({len(self.cached_headlines)} available)")
+        
+        return self.cached_headlines
+    
+    def process_headlines(self, headlines: List[str]) -> List[Dict]:
+        """Process headlines through LLM and return approved messages"""
+        approved_messages = []
+        
+        for headline in headlines:
+            print(f"🧠 Analyzing: {headline}")
+            analysis = self.llm_service.analyze_headline(headline)
+            
+            if analysis.get("should_send"):
+                approved_messages.append({
+                    "original_headline": headline,
+                    "generated_message": analysis["message"],
+                    "timestamp": datetime.now(),
+                    "llm_response": analysis
+                })
+                print(f"✅ Approved: {analysis['message']}")
+            else:
+                print(f"❌ Rejected: Not suitable for proactive messaging")
+        
+        return approved_messages
+    
+    def select_best_message(self, approved_messages: List[Dict]) -> Optional[Dict]:
+        """Select the single best message based on social potential"""
+        if not approved_messages:
+            return None
+        
+        # For now, select the first approved message
+        # In future, could implement scoring based on message length, keywords, etc.
+        best_message = approved_messages[0]
+        print(f"🎯 Selected best message: {best_message['generated_message']}")
+        return best_message
+    
+    def get_proactive_users_with_rate_limit(self, cycle_id: str) -> List[Dict]:
+        """Get proactive users with rate limiting (one message per cycle)"""
+        users = self.get_all_proactive_users()
+        
+        if not users:
+            return []
+        
+        eligible_users = []
+        try:
+            if not mongodb_client.connect():
+                print("❌ Failed to connect to MongoDB for rate limiting")
+                return []
+            
+            for user in users:
+                user_id = str(user["_id"])
+                
+                # Check if user already received message in this cycle
+                recent_message = mongodb_client.db["proactive_logs"].find_one({
+                    "user_id": user_id,
+                    "cycle_id": cycle_id,
+                    "status": "sent"
+                })
+                
+                if not recent_message:
+                    eligible_users.append(user)
+                else:
+                    print(f"⏭️ User {user.get('username')} already received message this cycle")
+                    
+        except Exception as e:
+            print(f"❌ Error in rate limiting: {e}")
+        finally:
+            mongodb_client.disconnect()
+        
+        print(f"👥 Found {len(eligible_users)} eligible users out of {len(users)} total proactive users")
+        return eligible_users
+    
+    def coordinated_send_and_inject(self, message: Dict, users: List[Dict], cycle_id: str) -> Dict:
+        """Coordinate FCM send with database injection"""
+        results = {
+            "fcm_sent": 0,
+            "fcm_failed": 0,
+            "injected": 0,
+            "injection_failed": 0,
+            "details": []
+        }
+        
+        print(f"📱 Sending FCM notifications to {len(users)} users...")
+        
+        for user in users:
+            user_id = str(user["_id"])
+            fcm_token = user["fcmToken"]
+            
+            try:
+                # Step 1: Send FCM notification
+                from core.models import UserContext
+                notification_result = self.fcm_service.send_to_user(
+                    user=UserContext(
+                        user_id=user_id,
+                        name=user.get('username', 'Unknown'),
+                        fcm_token=fcm_token
+                    ),
+                    body=message["generated_message"],
+                    title="נושא שיחה חדש"
+                )
+                
+                if notification_result:
+                    results["fcm_sent"] += 1
+                    print(f"✅ FCM sent to {user.get('username')}")
+                    
+                    # Step 2: Inject message only after successful FCM
+                    injection_result = self.inject_prompt(user_id, message["generated_message"])
+                    
+                    if injection_result:
+                        results["injected"] += 1
+                        print(f"💬 Message injected for {user.get('username')}")
+                        
+                        # Step 3: Log success
+                        self.log_proactive_event(cycle_id, user_id, message, "sent", notification_result)
+                    else:
+                        results["injection_failed"] += 1
+                        print(f"❌ Injection failed for {user.get('username')}")
+                        
+                else:
+                    results["fcm_failed"] += 1
+                    print(f"❌ FCM failed for {user.get('username')}")
+                    
+            except Exception as e:
+                results["fcm_failed"] += 1
+                print(f"❌ Error processing user {user.get('username')}: {e}")
+        
+        return results
+    
+    def log_proactive_event(self, cycle_id: str, user_id: str, message: Dict, status: str, notification_id: str = None):
+        """Log proactive event for research analysis"""
+        try:
+            log_entry = {
+                "cycle_id": cycle_id,
+                "timestamp": datetime.now(),
+                "user_id": user_id,
+                "original_headline": message["original_headline"],
+                "generated_message": message["generated_message"],
+                "status": status,
+                "notification_id": notification_id,
+                "llm_response": message.get("llm_response", {})
+            }
+            
+            mongodb_client.db["proactive_logs"].insert_one(log_entry)
+            
+        except Exception as e:
+            print(f"❌ Error logging proactive event: {e}")
+    
+    def run_full_proactive_cycle(self) -> Dict:
+        """Main orchestrator for proactive research cycle"""
+        cycle_id = str(uuid.uuid4())
+        start_time = datetime.now()
+        
+        print(f"\n=== 🚀 Starting Proactive Cycle {cycle_id[:8]}... ===")
+        
+        try:
+            # Step 1: Get fresh headlines
+            headlines = self.get_fresh_headlines()
+            
+            if not headlines:
+                print("❌ No headlines available")
+                return {"success": False, "message": "No headlines available"}
+            
+            # Step 2: Process through LLM
+            approved_messages = self.process_headlines(headlines)
+            
+            if not approved_messages:
+                print("❌ No messages approved by LLM")
+                return {"success": False, "message": "No messages approved by LLM"}
+            
+            # Step 3: Select single best message (one per cycle)
+            best_message = self.select_best_message(approved_messages)
+            
+            if not best_message:
+                print("❌ No best message selected")
+                return {"success": False, "message": "No best message selected"}
+            
+            # Step 4: Get eligible users
+            eligible_users = self.get_proactive_users_with_rate_limit(cycle_id)
+            
+            if not eligible_users:
+                print("❌ No eligible users found")
+                return {"success": False, "message": "No eligible users found"}
+            
+            # Step 5: Send and inject
+            results = self.coordinated_send_and_inject(best_message, eligible_users, cycle_id)
+            
+            # Step 6: Log cycle completion
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            
+            print(f"\n✅ Proactive Cycle Complete!")
+            print(f"📊 Results: {results['fcm_sent']} FCM sent, {results['injected']} injected")
+            print(f"⏱️ Duration: {duration:.2f} seconds")
+            
+            return {
+                "success": True,
+                "cycle_id": cycle_id,
+                "results": results,
+                "duration": duration,
+                "message_used": best_message
+            }
+            
+        except Exception as e:
+            print(f"❌ Proactive cycle failed: {e}")
+            return {
+                "success": False,
+                "cycle_id": cycle_id,
+                "error": str(e)
+            }
 
 # Singleton instance
 research_service = ResearchService()
