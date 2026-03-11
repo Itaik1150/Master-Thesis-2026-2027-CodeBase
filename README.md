@@ -13,7 +13,7 @@ Note: This component is based on the original Lexi project by Tomer lavan - http
 
 /android-app: A specialized mobile application designed for experiment participants, supporting proactive notifications and real-time LLM interactions.
 
-/logic-python: (Optional: add a brief description of what this folder does, e.g., data analysis or specific LLM scripts).
+/logic-python.
 
 🛠 Features Added in this Research
 Proactive Experiment Control: A dedicated UI to toggle proactivity and adjust message frequency per experiment.
