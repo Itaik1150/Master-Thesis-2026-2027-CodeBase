@@ -66,10 +66,11 @@ export const updateUsersAgent = async (agent: AgentType): Promise<void> => {
     }
 };
 
-export const updateFCMToken = async (fcmToken: string): Promise<void> => {
+export const updateFCMToken = async (userId: string, fcmToken: string): Promise<void> => {
     try {
         const response = await axiosInstance.post(`/${ApiPaths.USERS_PATH}/fcm-token`, {
-            fcmToken
+            userId,
+            fcmToken,
         });
         return response.data;
     } catch (error) {

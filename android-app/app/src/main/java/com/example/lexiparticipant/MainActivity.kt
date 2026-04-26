@@ -42,7 +42,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun AppRoot() {
-    val fixedUrl = "http://10.0.2.2:3000/e/695948af6ac218de3379a861"
+    val fixedUrl = "http://10.0.2.2:3000/e/69e397f15daf7d1e1d399827"
     ChatScreen(url = fixedUrl)
 }
 
@@ -125,12 +125,26 @@ private fun ChatScreen(url: String) {
                     settings.domStorageEnabled = true
                     settings.useWideViewPort = true
                     settings.loadWithOverviewMode = true
+                    
+                    // Allow mixed content for HTTP in WebView
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                    }
 
-                    webViewClient = WebViewClient()
-                    webChromeClient = WebChromeClient()
+                    webViewClient = object : WebViewClient() {
+                        override fun onReceivedError(
+                            view: WebView?,
+                            request: android.webkit.WebResourceRequest?,
+                            error: android.webkit.WebResourceError?
+                        ) {
+                            super.onReceivedError(view, request, error)
+                            android.util.Log.e("MY_DEBUG_TAG", "WebView Error: " + error?.description)
+                        }
+                    }
+                    webChromeClient = WebChromeClient() 
 
                     addJavascriptInterface(AndroidBridge(context), "Android")
-
+                    android.util.Log.d("MY_DEBUG_TAG", "Loading URL: " + url)
                     loadUrl(url)
                 }
             }
