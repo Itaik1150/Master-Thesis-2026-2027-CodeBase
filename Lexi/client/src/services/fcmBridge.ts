@@ -11,17 +11,21 @@ declare global {
       getFCMToken: () => string;
       isTokenAvailable: () => boolean;
       getDeviceInfo: () => string;
+      setCurrentUserId: (userId: string) => void;
     };
   }
 }
 
-export const setupFCMBridge = async (): Promise<void> => {
+export const setupFCMBridge = async (userId: string): Promise<void> => {
   try {
     // Check if running inside Android WebView
     if (!window.Android) {
       console.log('FCM Bridge: Not running in Android WebView');
       return;
     }
+
+    // Store the real user ID immediately — independent of FCM token availability
+    window.Android.setCurrentUserId(userId);
 
     // Get current FCM token
     const currentToken = await getCurrentFCMToken();
@@ -37,12 +41,12 @@ export const setupFCMBridge = async (): Promise<void> => {
     const { updateFCMToken } = await import('../DAL/server-requests/users');
     
     // Send token to backend
-    await updateFCMToken(currentToken);
+    await updateFCMToken(userId, currentToken);
     
     console.log('FCM Bridge: Token synced with backend successfully');
     
     // Set up token refresh listener (if available)
-    setupTokenRefreshListener();
+    setupTokenRefreshListener(userId);
     
   } catch (error) {
     console.error('FCM Bridge: Failed to setup FCM bridge', error);
@@ -82,7 +86,7 @@ export const getCurrentFCMToken = async (): Promise<string | null> => {
 /**
  * Set up token refresh listener (placeholder for future Firebase implementation)
  */
-export const setupTokenRefreshListener = (): void => {
+export const setupTokenRefreshListener = (userId: string): void => {
   // This would be used if we had Firebase JS SDK in the WebView
   // For now, we'll rely on periodic token checks
   console.log('FCM Bridge: Token refresh listener setup (placeholder)');
@@ -93,7 +97,7 @@ export const setupTokenRefreshListener = (): void => {
       const currentToken = await getCurrentFCMToken();
       if (currentToken) {
         const { updateFCMToken } = await import('../DAL/server-requests/users');
-        await updateFCMToken(currentToken);
+        await updateFCMToken(userId, currentToken);
         console.log('FCM Bridge: Periodic token sync completed');
       }
     } catch (error) {

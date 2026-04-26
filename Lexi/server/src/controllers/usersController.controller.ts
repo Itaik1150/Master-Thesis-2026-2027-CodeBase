@@ -2,10 +2,11 @@ import { CookieOptions, Request, Response } from 'express';
 import { usersService } from '../services/users.service';
 import { requestHandler } from '../utils/requestHandler';
 
+const isProduction = process.env.NODE_ENV === 'production';
 const cookieConfig: CookieOptions = {
     httpOnly: true,
-    sameSite: 'none',
-    secure: true,
+    sameSite: isProduction ? 'none' : 'lax',
+    secure: isProduction,
     maxAge: 24 * 60 * 60 * 1000,
 };
 
@@ -94,7 +95,7 @@ class UsersController {
     updateFCMToken = requestHandler(
         async (req: Request, res: Response) => {
             const { userId, fcmToken } = req.body;
-            
+
             if (!userId || !fcmToken) {
                 const error = new Error('userId and fcmToken are required');
                 error['code'] = 400;

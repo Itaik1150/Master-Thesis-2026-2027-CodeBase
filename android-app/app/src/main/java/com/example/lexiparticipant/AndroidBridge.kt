@@ -27,10 +27,14 @@ class AndroidBridge(private val context: Context) {
     }
 
     @JavascriptInterface
+    fun setCurrentUserId(userId: String) {
+        sharedPreferences.edit().putString("userId", userId).apply()
+        Log.d("AndroidBridge", "User ID saved: $userId")
+    }
+
+    @JavascriptInterface
     fun getCurrentUserId(): String {
-        // Extract user ID from the WebView URL or use a default
-        // This will be enhanced to parse from actual experiment URL
-        return "user_123" // Default for now, will be dynamic
+        return sharedPreferences.getString("userId", "") ?: ""
     }
 
     @JavascriptInterface

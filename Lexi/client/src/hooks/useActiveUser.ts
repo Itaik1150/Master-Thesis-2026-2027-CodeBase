@@ -21,7 +21,7 @@ const useActiveUser = () => {
                 // Setup FCM bridge after successful authentication
                 if (fetchedUser && !fetchedUser.isAdmin) {
                     try {
-                        await setupFCMBridge();
+                        await setupFCMBridge(String(fetchedUser._id));
                     } catch (error) {
                         console.warn('FCM Bridge setup failed:', error);
                     }
@@ -54,14 +54,19 @@ const useActiveUser = () => {
             return;
         }
 
+        // Store user ID in native Android bridge whenever a user becomes active
+        if (window.Android?.setCurrentUserId) {
+            window.Android.setCurrentUserId(String(reduxUser._id));
+        }
+
         // Sync token immediately when user becomes active
         const syncToken = async () => {
             try {
                 const { getCurrentFCMToken } = await import('../services/fcmBridge');
                 const { updateFCMToken } = await import('../DAL/server-requests/users');
                 const currentToken = await getCurrentFCMToken();
-                if (currentToken) {
-                    await updateFCMToken(currentToken);
+                if (currentToken && reduxUser._id) {
+                    await updateFCMToken(String(reduxUser._id), currentToken);
                     console.log('🔄 FCM token synced on user activation');
                 }
             } catch (error) {
