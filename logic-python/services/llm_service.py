@@ -215,6 +215,49 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
             print(f"❌ Error analyzing headline: {e}")
             return {"should_send": False, "message": "NONE"}
     
+    def generate_topic_message(self, topic: str) -> str:
+        """
+        Generate a Hebrew conversation starter from a topic (no headline needed).
+        Used as fallback when all news headlines are rejected.
+
+        Returns:
+            Hebrew message string, or empty string on failure.
+        """
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+            data = {
+                "model": "gpt-3.5-turbo",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a social interaction assistant for an Israeli research experiment. "
+                            "Generate a short, friendly, open-ended conversation starter in Hebrew (max 15 words) "
+                            "about the given topic. The message should feel natural and invite a response. "
+                            "Return ONLY the Hebrew sentence, nothing else."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Topic: {topic}"
+                    }
+                ],
+                "temperature": 0.7,
+                "max_tokens": 60
+            }
+            response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            if "choices" in result and result["choices"]:
+                return result["choices"][0]["message"]["content"].strip()
+            return ""
+        except Exception as e:
+            print(f"❌ Error generating topic message: {e}")
+            return ""
+
     def _mock_analysis(self, headline: str) -> Dict[str, any]:
         """
         Mock analysis for testing without API key (generates Hebrew messages)
