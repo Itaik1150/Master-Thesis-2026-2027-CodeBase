@@ -54,15 +54,8 @@ Always consider how changes affect all components.
 
 
 Current Task:
-Fix FCM token update after login.
 
-Focus files:
-- fcmBridge.ts
-- users.ts
-- usersController.controller.ts
-
-Goal:
-Ensure userId + fcmToken are correctly saved in MongoDB.
+Phase 2 complete — move to Phase 3 (FCM → Conversation Deep-Link)
 
 
 Project Context:

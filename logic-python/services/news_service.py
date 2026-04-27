@@ -3,9 +3,13 @@ Simple News Service for Proactive Research
 Fetches top headlines from Israel using free News API
 """
 
+import os
 import requests
 import json
 from typing import List, Dict, Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class NewsService:
     """
@@ -15,61 +19,77 @@ class NewsService:
     def __init__(self):
         """Initialize news service with free News API"""
         # Using NewsAPI.org - free tier allows 1000 requests/day
-        self.api_key = "your_news_api_key_here"  # Replace with actual API key
+        self.api_key = os.getenv('NEWS_API_KEY', '')
         self.base_url = "https://newsapi.org/v2"
         
     def fetch_israel_headlines(self, max_results: int = 5) -> List[Dict]:
         """
-        Fetch top headlines from Israel
-        
-        Args:
-            max_results: Maximum number of headlines to fetch
-            
-        Returns:
-            List of headline dictionaries
+        Fetch top headlines from Israel, trying backup topics if primary query
+        returns fewer results than needed.
         """
-        try:
-            # For testing without API key, return mock data
-            if self.api_key == "your_news_api_key_here":
-                print("🔧 Using mock data (add real API key for live data)")
-                return self._get_mock_headlines(max_results)
-            
-            # Real API call
-            url = f"{self.base_url}/top-headlines"
-            params = {
-                "country": "il",  # Israel
-                "pageSize": max_results,
-                "apiKey": self.api_key
-            }
-            
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            if data.get("status") != "ok":
-                print(f"❌ API Error: {data.get('message', 'Unknown error')}")
-                return []
-            
-            headlines = []
-            for article in data.get("articles", [])[:max_results]:
-                headline = {
-                    "title": article.get("title", ""),
-                    "description": article.get("description", ""),
-                    "source": article.get("source", {}).get("name", ""),
-                    "published_at": article.get("publishedAt", ""),
-                    "url": article.get("url", "")
+        if not self.api_key:
+            print("🔧 No API key — using mock data")
+            return self._get_mock_headlines(max_results)
+
+        # Primary + backup queries tried in order until we have enough articles.
+        # Backups are broad global topics — interesting to any user regardless of location.
+        queries = [
+            "israel",
+            "technology",
+            "science",
+            "health",
+            "innovation",
+            "environment",
+        ]
+
+        collected: List[Dict] = []
+        seen_titles = set()
+
+        for query in queries:
+            if len(collected) >= max_results:
+                break
+            try:
+                url = f"{self.base_url}/top-headlines"
+                params = {
+                    "q": query,
+                    "language": "en",
+                    "pageSize": max_results,
+                    "apiKey": self.api_key,
                 }
-                headlines.append(headline)
-            
-            return headlines
-            
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Network error fetching news: {e}")
-            return []
-        except Exception as e:
-            print(f"❌ Error fetching headlines: {e}")
-            return []
+                response = requests.get(url, params=params, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+
+                if data.get("status") != "ok":
+                    print(f"❌ API Error for '{query}': {data.get('message', 'Unknown error')}")
+                    continue
+
+                for article in data.get("articles", []):
+                    title = article.get("title", "")
+                    if title and title not in seen_titles:
+                        seen_titles.add(title)
+                        collected.append({
+                            "title": title,
+                            "description": article.get("description", ""),
+                            "source": article.get("source", {}).get("name", ""),
+                            "published_at": article.get("publishedAt", ""),
+                            "url": article.get("url", ""),
+                        })
+                    if len(collected) >= max_results:
+                        break
+
+                print(f"📡 '{query}' → {len(collected)} articles total so far")
+
+            except requests.exceptions.RequestException as e:
+                print(f"❌ Network error for query '{query}': {e}")
+            except Exception as e:
+                print(f"❌ Error for query '{query}': {e}")
+
+        if not collected:
+            print("⚠️ All queries returned 0 results — falling back to mock data")
+            return self._get_mock_headlines(max_results)
+
+        return collected[:max_results]
     
     def _get_mock_headlines(self, max_results: int = 5) -> List[Dict]:
         """

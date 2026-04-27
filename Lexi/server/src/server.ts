@@ -42,7 +42,8 @@ const setupServer = () => {
             process.env.FRONTEND_URL || 'http://localhost:3000',
             'http://10.0.2.2:3000',
             'http://127.0.0.1:3000',
-            'http://0.0.0.0:3000'
+            'http://0.0.0.0:3000',
+            'http://192.168.31.94:3000',  // real phone WiFi testing
         ],
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],

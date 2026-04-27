@@ -93,7 +93,7 @@ class ResearchService:
                 print("❌ Failed to connect to MongoDB")
                 return False
             
-            user_data = mongodb_client.db[mongodb_client.users_collection].find_one({"_id": user_id})
+            user_data = mongodb_client.db[mongodb_client.users_collection].find_one({"_id": ObjectId(str(user_id))})
             
             if not user_data:
                 print(f"❌ User {user_id} not found")
@@ -241,7 +241,7 @@ class ResearchService:
                 print("❌ Failed to connect to MongoDB")
                 return
             
-            user_data = mongodb_client.db[mongodb_client.users_collection].find_one({"_id": user_id})
+            user_data = mongodb_client.db[mongodb_client.users_collection].find_one({"_id": ObjectId(str(user_id))})
             
             if not user_data:
                 print(f"❌ User {user_id} not found in database")
@@ -568,12 +568,36 @@ class ResearchService:
                 print("❌ No headlines available")
                 return {"success": False, "message": "No headlines available"}
             
-            # Step 2: Process through LLM
+            # Step 2: Process through LLM — retry with fresh fetch if all rejected
             approved_messages = self.process_headlines(headlines)
-            
+
             if not approved_messages:
-                print("❌ No messages approved by LLM")
-                return {"success": False, "message": "No messages approved by LLM"}
+                print("⚠️ First batch rejected — fetching fresh headlines and retrying...")
+                self.last_news_fetch = None  # bypass cache
+                headlines = self.get_fresh_headlines()
+                approved_messages = self.process_headlines(headlines)
+
+            if not approved_messages:
+                print("⚠️ News rejected — generating topic-based message as fallback...")
+                import random
+                fallback_topics = [
+                    "artificial intelligence", "travel", "food and cooking",
+                    "music", "books", "sport", "movies", "nature",
+                ]
+                topic = random.choice(fallback_topics)
+                print(f"🎲 Selected topic: {topic}")
+                fallback_message = self.llm_service.generate_topic_message(topic)
+                if fallback_message:
+                    approved_messages = [{
+                        "original_headline": f"[topic fallback: {topic}]",
+                        "generated_message": fallback_message,
+                        "timestamp": datetime.now(),
+                        "llm_response": {"should_send": True, "message": fallback_message}
+                    }]
+                    print(f"✅ Fallback message: {fallback_message}")
+                else:
+                    print("❌ No messages approved by LLM after retry and fallback")
+                    return {"success": False, "message": "No messages approved by LLM"}
             
             # Step 3: Select single best message (one per cycle)
             best_message = self.select_best_message(approved_messages)

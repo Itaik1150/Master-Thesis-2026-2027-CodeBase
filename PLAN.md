@@ -1,6 +1,6 @@
 # Lexi — Proactive Experiment System: Full Project Plan
 
-> **Last updated:** April 2026 (revised — cloud deployment phase added)  
+> **Last updated:** April 27, 2026 (Phase 1 & Phase 2 complete — real-phone pilot working end-to-end)  
 > **Author:** Master Thesis 2026–2027 CodeBase
 
 ---
@@ -16,11 +16,12 @@
 7. [Known Bugs & Gaps](#7-known-bugs--gaps)
 8. [Implementation Roadmap](#8-implementation-roadmap)
    - Phase 1 — Core Bug Fixes
-   - Phase 2 — Cloud Deployment (production-ready system on real devices)
+   - Phase 2 — Real-Phone Pilot Testing (local WiFi / ngrok)
    - Phase 3 — FCM → Conversation Deep-Link
    - Phase 4 — Proactive Logic Improvements
    - Phase 5 — Researcher Dashboard Enhancements
    - Phase 6 — Quality & Research
+   - Phase 7 — Cloud Deployment (when ready for the real experiment)
 9. [Key Files Quick Reference](#9-key-files-quick-reference)
 10. [Environment Variables Reference](#10-environment-variables-reference)
 11. [Development Setup](#11-development-setup)
@@ -307,24 +308,30 @@ Participant in chat screen
 
 ---
 
-## 6. Current Working State (as of April 2026)
+## 6. Current Working State (as of April 27, 2026)
 
 | Feature | Status |
 |---------|--------|
-| FCM end-to-end delivery (token → MongoDB → Python → device) | Working |
-| Proactive experiment toggle in admin dashboard | Working |
-| `isProactive` flag assignment on first FCM token receipt | Working (random 50%) |
-| Android WebView renders experiment in emulator | Working |
-| `proactive_logs` collection logs each cycle | Working |
-| News fetch → LLM filter → FCM send pipeline | Working (manual run only) |
-| FCM token sync from WebView after login | Working (Bug #1 fixed) |
-| Notification tap → correct conversation deep-link | **Not implemented** |
-| Experiment URL configurable per APK | **Not implemented** |
-| System deployed to cloud (real devices, production URLs) | **Not implemented** |
-| Notification scheduling (automatic) | **Not implemented** |
-| Conversation memory for LLM | **Not implemented** |
-| Web search capability | **Not implemented** |
-| APK generation from dashboard | **Not implemented** |
+| FCM end-to-end delivery (token → MongoDB → Python → device) | ✅ Working |
+| Proactive experiment toggle in admin dashboard | ✅ Working |
+| `isProactive` flag assignment on first FCM token receipt | ✅ Working |
+| Android WebView renders experiment on emulator | ✅ Working |
+| Android WebView renders experiment on **real phone** (WiFi) | ✅ Working |
+| Experiment URL configurable via `BuildConfig` (no code edit needed) | ✅ Working |
+| FCM token sync from WebView after login | ✅ Working |
+| `fcmTokenUpdatedAt` saved to MongoDB on token update | ✅ Working |
+| News fetch → LLM filter → FCM send pipeline | ✅ Working (manual run) |
+| Real news from NewsAPI (live headlines, not mock) | ✅ Working |
+| LLM content filter (rejects war/sensitive topics) | ✅ Working |
+| Topic-based fallback message when all news rejected | ✅ Working |
+| `proactive_logs` collection logs each cycle | ✅ Working |
+| Message injected as `firstChatSentence` after FCM | ✅ Working |
+| Notification tap → correct conversation deep-link | ❌ Not implemented (Phase 3) |
+| Notification scheduling (automatic) | ❌ Not implemented (Phase 4) |
+| System deployed to cloud (real devices, production URLs) | ❌ Not implemented (Phase 7) |
+| Conversation memory for LLM | ❌ Not implemented (Phase 4) |
+| Web search capability | ❌ Not implemented (Phase 4) |
+| APK generation from dashboard | ❌ Not implemented (Phase 5) |
 
 ---
 
@@ -334,11 +341,11 @@ Participant in chat screen
 |---|-------|----------|----------|
 | 1 | ~~`updateFCMToken` in React DAL sends only `{ fcmToken }`, server requires `{ userId, fcmToken }` — token update always fails silently after login~~ | ~~`Lexi/client/src/services/fcmBridge.ts` + `src/DAL/server-requests/users.ts`~~ | **Fixed** |
 | 2 | ~~`getCurrentUserId()` returns hardcoded `"user_123"` — AndroidBridge cannot correctly associate token with real user~~ | ~~`android-app/.../AndroidBridge.kt`~~ | **Fixed** |
-| 3 | Experiment URL hardcoded to emulator address in `MainActivity.kt` — cannot distribute APK to real devices | `android-app/.../MainActivity.kt` | **High** |
-| 4 | `send_notification()` uses `find_one({"_id": user_id})` without `ObjectId()` wrapper — query always fails in Mongo | `logic-python/services/research_service.py:96` | **High** |
+| 3 | ~~Experiment URL hardcoded to emulator address in `MainActivity.kt` — cannot distribute APK to real devices~~ | ~~`android-app/.../MainActivity.kt`~~ | **Fixed** |
+| 4 | ~~`send_notification()` uses `find_one({"_id": user_id})` without `ObjectId()` wrapper — query always fails in Mongo~~ | ~~`logic-python/services/research_service.py:96`~~ | **Fixed** |
 | 5 | `UserContext` dataclass is missing `last_interaction` and `interests` fields used by `decision_engine.py` — causes AttributeError at runtime | `logic-python/core/models.py` | **Medium** |
-| 6 | `fcmTokenUpdatedAt` declared in TypeScript type `IUser` but absent from Mongoose schema — field silently discarded on save | `Lexi/server/src/models/UsersModel.ts` | **Medium** |
-| 7 | `requirements.txt` is incomplete — missing `firebase-admin`, `openai`, `requests`, `groq`; fresh install will fail | `logic-python/requirements.txt` | **Medium** |
+| 6 | ~~`fcmTokenUpdatedAt` declared in TypeScript type `IUser` but absent from Mongoose schema — field silently discarded on save~~ | ~~`Lexi/server/src/models/UsersModel.ts`~~ | **Fixed** |
+| 7 | ~~`requirements.txt` is incomplete — missing `firebase-admin`, `requests`; fresh install will fail~~ | ~~`logic-python/requirements.txt`~~ | **Fixed** |
 | 8 | `isProactive` is randomly assigned (50%) regardless of whether the experiment has `proactiveSettings.enabled = true` | `Lexi/server/src/services/users.service.ts` | **Medium** |
 | 9 | No notification scheduling — Python engine must be started manually each time | `logic-python/main.py` | **Medium** |
 | 10 | Notification tap opens `MainActivity` with no context — does not deep-link to the specific conversation the notification was about | `android-app/.../LexiMessagingService.kt` | **Medium** |
@@ -489,208 +496,114 @@ fcmTokenUpdatedAt: { type: Date },
 
 ---
 
-### Phase 2 — Cloud Deployment
+### Phase 2 — Real-Phone Pilot Testing
 
-> **This phase must come before any feature upgrades.** The system must run on real cloud infrastructure, with all components reachable over the public internet, before real participants can join on physical Android devices. Local `10.0.2.2` emulator addresses are replaced by production URLs in every component.
+The goal of this phase is to test the full system end-to-end on **a real Android phone** (not the emulator), while the server still runs on your local computer. This is a personal pilot — a few days of self-testing before the real experiment — and does **not** require cloud deployment.
 
-The goal of this phase is a fully functional, end-to-end proactive experiment running on real Android phones with real users — not an emulator.
-
----
-
-#### 2.1 Choose and provision cloud infrastructure
-
-All three server-side components need a persistent, publicly reachable host.
-
-| Component | Recommended host | Notes |
-|-----------|-----------------|-------|
-| Lexi Node.js server | [Render](https://render.com) / [Railway](https://railway.app) / AWS EC2 | Free tiers work for research scale |
-| Lexi React client | [Vercel](https://vercel.com) / [Netlify](https://netlify.com) or served from Node server | Vercel gives HTTPS automatically |
-| Python engine | Cloud VM (e.g., AWS EC2 t3.micro, DigitalOcean Droplet, or Render background worker) | Needs to run continuously as a scheduler |
-| MongoDB | Already on MongoDB Atlas — no change needed | Ensure IP allowlist includes cloud server IPs or set to 0.0.0.0/0 for research |
-
-**Required output of this step:** production domain names for the Lexi server (e.g., `https://lexi-api.onrender.com`) and the React client (e.g., `https://lexi-app.vercel.app`).
+Cloud deployment (Phase 7) is only needed when you want the experiment to run for real participants 24/7 without your laptop being on.
 
 ---
 
-#### 2.2 Deploy the Lexi Node.js server
+#### 2.1 Connect a real phone to the local server
 
-1. Push the `Lexi/server` directory to a Git repository (or use the existing repo).
-2. Connect it to Render/Railway — set the build command to `npm install && npm run build` and start command to `node index.js`.
-3. Set all required environment variables in the hosting dashboard:
+The phone must be able to reach the Lexi server (`port 5000`) and React client (`port 3000`) running on your laptop. Two options:
 
-```
-MONGODB_URL=<atlas connection string>
-MONGODB_DB_NAME=LexiDB
-JWT_SECRET_KEY=<strong random secret>
-PORT=5000
-FRONTEND_URL=https://lexi-app.vercel.app
+**Option A — Same WiFi (simplest)**
+
+Both your laptop and phone are on the same WiFi network. Find your laptop's local IP:
+
+```powershell
+ipconfig   # look for "IPv4 Address" under your WiFi adapter, e.g. 192.168.1.15
 ```
 
-4. Ensure the server listens on `0.0.0.0` (already set in `server.ts` — no change needed).
-5. Note the public URL (e.g., `https://lexi-api.onrender.com`).
+The phone will reach the server at `http://192.168.1.15:5000` and the React app at `http://192.168.1.15:3000`.
+
+**Option B — ngrok (works on any network)**
+
+Install [ngrok](https://ngrok.com) and expose both ports:
+
+```bash
+ngrok http 3000   # gives you https://abc123.ngrok.io  (React app)
+ngrok http 5000   # gives you https://xyz456.ngrok.io  (Node server)
+```
+
+Note the two public URLs — they change each time ngrok restarts on the free tier.
 
 ---
 
-#### 2.3 Deploy the Lexi React client
+#### 2.2 Build the APK with the real server URL
 
-1. Set the client's environment variable to point to the cloud server:
+> **Note (already done in task 1.3):** The experiment URL is now injected via `BuildConfig`, so you only need to change **one line** in `app/build.gradle.kts` — no touching `MainActivity.kt`. After changing it, do **File → Sync Project with Gradle Files** in Android Studio, then rebuild the APK.
+
+**Switching between emulator and real phone (quick reference):**
+
+| Target | `build.gradle.kts` line to uncomment | `Lexi/client/` env |
+|--------|--------------------------------------|---------------------|
+| Real phone (WiFi) | `"http://192.168.31.94:3000/e/69e397f15daf7d1e1d399827"` | `.env.local` present (already created) |
+| Emulator | `"http://10.0.2.2:3000/e/69e397f15daf7d1e1d399827"` | Delete `.env.local` (`.env` takes over) |
+
+Both commented options are kept in `build.gradle.kts` — just uncomment the one you want and comment out the other. Then sync Gradle and rebuild.
+
+In `app/build.gradle.kts`, inside the `defaultConfig` block, replace the emulator address with your local IP (Option A) or ngrok URL (Option B):
+
+```kotlin
+// Option A — same WiFi
+buildConfigField("String", "EXPERIMENT_URL", "\"http://192.168.1.15:3000/e/<experimentId>\"")
+
+// Option B — ngrok
+buildConfigField("String", "EXPERIMENT_URL", "\"https://abc123.ngrok.io/e/<experimentId>\"")
+```
+
+Replace `<experimentId>` with the actual ID from MongoDB (e.g. `69e397f15daf7d1e1d399827`). Your local IP can be found by running `ipconfig` in PowerShell — look for "IPv4 Address" under your WiFi adapter.
+
+Also update the Lexi client `.env` so the React app talks to the right server:
 
 ```
-REACT_APP_SERVER_URL=https://lexi-api.onrender.com
+# Option A
+REACT_APP_SERVER_URL=http://192.168.1.15:5000
+
+# Option B
+REACT_APP_SERVER_URL=https://xyz456.ngrok.io
 ```
 
-2. Deploy `Lexi/client` to Vercel/Netlify — they auto-detect Create React App and set HTTPS.
-3. The participant experiment URL now becomes:
-   ```
-   https://lexi-app.vercel.app/e/<experimentId>
-   ```
-   This is the URL that gets embedded in the APK and distributed to participants.
-
----
-
-#### 2.4 Update CORS on the Node.js server
-
-In `Lexi/server/src/server.ts`, update the CORS origin to allow the deployed client URL (alongside `localhost` for development):
+And update the CORS allowed origins in `Lexi/server/src/server.ts`:
 
 ```typescript
-app.use(cors({
-    origin: [
-        process.env.FRONTEND_URL,       // e.g. https://lexi-app.vercel.app
-        'http://localhost:3000',          // local dev
-    ],
-    credentials: true,
-}));
+origin: [
+    process.env.FRONTEND_URL || 'http://localhost:3000',
+    'http://10.0.2.2:3000',          // emulator (keep for dev)
+    'http://192.168.1.15:3000',      // local WiFi (Option A)
+    'https://abc123.ngrok.io',       // ngrok (Option B)
+],
 ```
 
 ---
 
-#### 2.5 Update the Android APK for production
+#### 2.3 Install the APK on the phone and run the pilot
 
-This is the critical step that allows real participants to use the app on physical devices.
-
-**a. Replace emulator addresses with the production URL.**
-
-In `app/build.gradle.kts`, set the real experiment URL:
-
-```kotlin
-android {
-    defaultConfig {
-        buildConfigField(
-            "String", "EXPERIMENT_URL",
-            "\"https://lexi-app.vercel.app/e/<experimentId>\""
-        )
-        buildConfigField(
-            "String", "BASE_URL",
-            "\"https://lexi-app.vercel.app\""
-        )
-    }
-}
-```
-
-**b. Remove cleartext HTTP exceptions** from `network_security_config.xml` — production traffic runs over HTTPS only:
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <!-- No cleartext exceptions in production -->
-</network-security-config>
-```
-
-Keep a separate `network_security_config_debug.xml` with the `10.0.2.2` cleartext exceptions for local development builds.
-
-**c. Sign the APK for distribution.** Create a release keystore and configure signing in `build.gradle.kts`:
-
-```kotlin
-signingConfigs {
-    create("release") {
-        storeFile = file("lexi-release.jks")
-        storePassword = System.getenv("KEYSTORE_PASSWORD")
-        keyAlias = "lexi"
-        keyPassword = System.getenv("KEY_PASSWORD")
-    }
-}
-buildTypes {
-    release {
-        signingConfig = signingConfigs.getByName("release")
-        isMinifyEnabled = true
-        proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-    }
-}
-```
-
-Build the release APK:
-```bash
-./gradlew assembleRelease
-```
-
-The `.apk` file is at `app/build/outputs/apk/release/app-release.apk` and can be distributed to participants directly (via email, WhatsApp, Google Drive, etc.).
+1. Build the debug APK: **Build → Build Bundle(s)/APK(s) → Build APK(s)** in Android Studio.
+2. Copy the APK to the phone (USB, email, Google Drive) and install it (allow unknown sources).
+3. Make sure the Lexi server and React client are running on your laptop.
+4. Open the app on the phone — it should load the experiment page.
+5. Register, log in, and verify in the server terminal that the FCM token is saved.
+6. Run `python main.py` in `logic-python/` to send a manual proactive notification.
+7. Verify the notification appears on the phone.
 
 ---
 
-#### 2.6 Deploy the Python engine to a cloud host
+#### 2.4 What to validate during the pilot
 
-The Python engine must run continuously on a cloud VM to send scheduled notifications.
-
-1. Provision a small cloud VM (e.g., AWS EC2 `t3.micro`, DigitalOcean Droplet, or Render background worker).
-2. Upload `logic-python/` to the VM (or pull from Git).
-3. Set up the environment:
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-4. Create the production `.env` file on the VM:
-
-```
-MONGODB_URL=<atlas connection string>
-MONGODB_DB_NAME=LexiDB
-MONGODB_USERS_COLLECTION=users
-SERVICE_ACCOUNT_JSON=/path/to/lexi-firebase-adminsdk.json
-OPENAI_API_KEY=<key>
-GROQ_API_KEY=<key>
-LEXI_SERVER_URL=https://lexi-api.onrender.com
-```
-
-5. Run the scheduler as a persistent process using `systemd` or `screen`/`tmux`:
-
-```bash
-# Using screen (simple)
-screen -S lexi-scheduler
-python scheduler.py
-
-# Or using systemd (production-grade)
-# Create /etc/systemd/system/lexi-scheduler.service
-```
+| Check | Expected result |
+|-------|----------------|
+| App loads on real phone | Experiment page loads (not a network error) |
+| Registration works | User appears in MongoDB Atlas `users` collection |
+| FCM token saved | `fcmToken` field populated in MongoDB after registration |
+| Manual notification received | Push notification appears on the phone |
+| Conversation works | Chat messages send and receive AI responses |
+| Server logs show correct user ID | `🔄 Updating FCM token for user: <real ObjectId>` |
 
 ---
 
-#### 2.7 Ensure Firebase FCM works with real devices
-
-FCM on real physical Android devices requires no special configuration beyond what is already in `google-services.json` — the token generation is automatic. However, verify:
-
-- The Firebase project (`lexi-72330`) has **Cloud Messaging API (Legacy)** or **FCM v1** enabled in the Firebase console.
-- The Python engine's service account JSON has the `Firebase Cloud Messaging Admin` role.
-- Real-device FCM tokens are longer (160+ characters) — the server's minimum-length validation (`fcmToken.trim().length < 100`) should pass, but confirm with a real device test.
-
----
-
-#### 2.8 End-to-end test on a real Android device
-
-Before launching the experiment, run through the full flow on a physical phone:
-
-1. Install the release APK (from 2.5) on a physical Android phone (not an emulator).
-2. Open the app — it should load `https://lexi-app.vercel.app/e/<experimentId>`.
-3. Register a test user — the FCM token should be stored in MongoDB Atlas.
-4. Run one manual proactive cycle from the cloud VM: `python main.py`.
-5. Verify the push notification appears on the physical device.
-6. Tap the notification — the app should open (Phase 3 will add deep-linking to the exact conversation).
-7. Confirm the `firstChatSentence` appears as the AI's opening message in the chat.
-
-Only after this test passes is the system ready for real participants.
-
----
 
 ### Phase 3 — FCM → Conversation Deep-Link
 
@@ -952,6 +865,209 @@ Export these metrics from the admin dashboard's Data Panel.
 | Use HTTPS on the Lexi server in production | Before public deployment |
 | Update `network_security_config.xml` to remove cleartext exceptions in production build | Before APK distribution |
 | Validate and sanitize FCM token format on the client before sending | Short term |
+
+---
+
+### Phase 7 — Cloud Deployment
+
+> **This phase is only needed when you are ready for the real experiment with real participants.** Until then, the local pilot (Phase 2) is sufficient. Cloud deployment means the server runs 24/7 without your laptop, and the APK URLs point to permanent public addresses.
+
+The goal of this phase is a fully functional, end-to-end proactive experiment running on real Android phones with real users — not an emulator.
+
+---
+
+#### 7.1 Choose and provision cloud infrastructure
+
+All three server-side components need a persistent, publicly reachable host.
+
+| Component | Recommended host | Notes |
+|-----------|-----------------|-------|
+| Lexi Node.js server | [Render](https://render.com) / [Railway](https://railway.app) / AWS EC2 | Free tiers work for research scale |
+| Lexi React client | [Vercel](https://vercel.com) / [Netlify](https://netlify.com) or served from Node server | Vercel gives HTTPS automatically |
+| Python engine | Cloud VM (e.g., AWS EC2 t3.micro, DigitalOcean Droplet, or Render background worker) | Needs to run continuously as a scheduler |
+| MongoDB | Already on MongoDB Atlas — no change needed | Ensure IP allowlist includes cloud server IPs or set to 0.0.0.0/0 for research |
+
+**Required output of this step:** production domain names for the Lexi server (e.g., `https://lexi-api.onrender.com`) and the React client (e.g., `https://lexi-app.vercel.app`).
+
+---
+
+#### 7.2 Deploy the Lexi Node.js server
+
+1. Push the `Lexi/server` directory to a Git repository (or use the existing repo).
+2. Connect it to Render/Railway — set the build command to `npm install && npm run build` and start command to `node index.js`.
+3. Set all required environment variables in the hosting dashboard:
+
+```
+MONGODB_URL=<atlas connection string>
+MONGODB_DB_NAME=LexiDB
+JWT_SECRET_KEY=<strong random secret>
+PORT=5000
+FRONTEND_URL=https://lexi-app.vercel.app
+```
+
+4. Ensure the server listens on `0.0.0.0` (already set in `server.ts` — no change needed).
+5. Note the public URL (e.g., `https://lexi-api.onrender.com`).
+
+---
+
+#### 7.3 Deploy the Lexi React client
+
+1. Set the client's environment variable to point to the cloud server:
+
+```
+REACT_APP_SERVER_URL=https://lexi-api.onrender.com
+```
+
+2. Deploy `Lexi/client` to Vercel/Netlify — they auto-detect Create React App and set HTTPS.
+3. The participant experiment URL now becomes:
+   ```
+   https://lexi-app.vercel.app/e/<experimentId>
+   ```
+   This is the URL that gets embedded in the APK and distributed to participants.
+
+---
+
+#### 7.4 Update CORS on the Node.js server
+
+In `Lexi/server/src/server.ts`, update the CORS origin to allow the deployed client URL (alongside `localhost` for development):
+
+```typescript
+app.use(cors({
+    origin: [
+        process.env.FRONTEND_URL,       // e.g. https://lexi-app.vercel.app
+        'http://localhost:3000',          // local dev
+    ],
+    credentials: true,
+}));
+```
+
+---
+
+#### 7.5 Update the Android APK for production
+
+This is the critical step that allows real participants to use the app on physical devices.
+
+**a. Replace emulator addresses with the production URL.**
+
+In `app/build.gradle.kts`, set the real experiment URL:
+
+```kotlin
+android {
+    defaultConfig {
+        buildConfigField(
+            "String", "EXPERIMENT_URL",
+            "\"https://lexi-app.vercel.app/e/<experimentId>\""
+        )
+        buildConfigField(
+            "String", "BASE_URL",
+            "\"https://lexi-app.vercel.app\""
+        )
+    }
+}
+```
+
+**b. Remove cleartext HTTP exceptions** from `network_security_config.xml` — production traffic runs over HTTPS only:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- No cleartext exceptions in production -->
+</network-security-config>
+```
+
+Keep a separate `network_security_config_debug.xml` with the `10.0.2.2` cleartext exceptions for local development builds.
+
+**c. Sign the APK for distribution.** Create a release keystore and configure signing in `build.gradle.kts`:
+
+```kotlin
+signingConfigs {
+    create("release") {
+        storeFile = file("lexi-release.jks")
+        storePassword = System.getenv("KEYSTORE_PASSWORD")
+        keyAlias = "lexi"
+        keyPassword = System.getenv("KEY_PASSWORD")
+    }
+}
+buildTypes {
+    release {
+        signingConfig = signingConfigs.getByName("release")
+        isMinifyEnabled = true
+        proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+    }
+}
+```
+
+Build the release APK:
+```bash
+./gradlew assembleRelease
+```
+
+The `.apk` file is at `app/build/outputs/apk/release/app-release.apk` and can be distributed to participants directly (via email, WhatsApp, Google Drive, etc.).
+
+---
+
+#### 7.6 Deploy the Python engine to a cloud host
+
+The Python engine must run continuously on a cloud VM to send scheduled notifications.
+
+1. Provision a small cloud VM (e.g., AWS EC2 `t3.micro`, DigitalOcean Droplet, or Render background worker).
+2. Upload `logic-python/` to the VM (or pull from Git).
+3. Set up the environment:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+4. Create the production `.env` file on the VM:
+
+```
+MONGODB_URL=<atlas connection string>
+MONGODB_DB_NAME=LexiDB
+MONGODB_USERS_COLLECTION=users
+SERVICE_ACCOUNT_JSON=/path/to/lexi-firebase-adminsdk.json
+OPENAI_API_KEY=<key>
+GROQ_API_KEY=<key>
+LEXI_SERVER_URL=https://lexi-api.onrender.com
+```
+
+5. Run the scheduler as a persistent process using `systemd` or `screen`/`tmux`:
+
+```bash
+# Using screen (simple)
+screen -S lexi-scheduler
+python scheduler.py
+
+# Or using systemd (production-grade)
+# Create /etc/systemd/system/lexi-scheduler.service
+```
+
+---
+
+#### 7.7 Ensure Firebase FCM works with real devices
+
+FCM on real physical Android devices requires no special configuration beyond what is already in `google-services.json` — the token generation is automatic. However, verify:
+
+- The Firebase project (`lexi-72330`) has **Cloud Messaging API (Legacy)** or **FCM v1** enabled in the Firebase console.
+- The Python engine's service account JSON has the `Firebase Cloud Messaging Admin` role.
+- Real-device FCM tokens are longer (160+ characters) — the server's minimum-length validation (`fcmToken.trim().length < 100`) should pass, but confirm with a real device test.
+
+---
+
+#### 7.8 End-to-end test on a real Android device
+
+Before launching the experiment, run through the full flow on a physical phone:
+
+1. Install the release APK (from 2.5) on a physical Android phone (not an emulator).
+2. Open the app — it should load `https://lexi-app.vercel.app/e/<experimentId>`.
+3. Register a test user — the FCM token should be stored in MongoDB Atlas.
+4. Run one manual proactive cycle from the cloud VM: `python main.py`.
+5. Verify the push notification appears on the physical device.
+6. Tap the notification — the app should open (Phase 3 will add deep-linking to the exact conversation).
+7. Confirm the `firstChatSentence` appears as the AI's opening message in the chat.
+
+Only after this test passes is the system ready for real participants.
 
 ---
 
