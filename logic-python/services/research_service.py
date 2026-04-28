@@ -3,9 +3,11 @@ Minimal Research Service - Basic injection and FCM functionality
 """
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from bson import ObjectId
+
+MAX_DAILY_NOTIFICATIONS = 3  # hard cap per user per day; raised later via dashboard
 
 from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
@@ -443,39 +445,53 @@ class ResearchService:
         return best_message
     
     def get_proactive_users_with_rate_limit(self, cycle_id: str) -> List[Dict]:
-        """Get proactive users with rate limiting (one message per cycle)"""
+        """Get proactive users, skipping those who already hit their daily notification cap."""
         users = self.get_all_proactive_users()
-        
+
         if not users:
             return []
-        
+
         eligible_users = []
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
         try:
             if not mongodb_client.connect():
                 print("❌ Failed to connect to MongoDB for rate limiting")
                 return []
-            
+
             for user in users:
                 user_id = str(user["_id"])
-                
-                # Check if user already received message in this cycle
-                recent_message = mongodb_client.db["proactive_logs"].find_one({
+                username = user.get("username", "Unknown")
+
+                # Check daily cap
+                daily_count = mongodb_client.db["proactive_logs"].count_documents({
+                    "user_id": user_id,
+                    "status": "sent",
+                    "timestamp": {"$gte": today_start}
+                })
+
+                if daily_count >= MAX_DAILY_NOTIFICATIONS:
+                    print(f"⏭️  {username} hit daily cap ({daily_count}/{MAX_DAILY_NOTIFICATIONS}), skipping")
+                    continue
+
+                # Also skip if already received a message in this exact cycle
+                in_cycle = mongodb_client.db["proactive_logs"].find_one({
                     "user_id": user_id,
                     "cycle_id": cycle_id,
                     "status": "sent"
                 })
-                
-                if not recent_message:
-                    eligible_users.append(user)
-                else:
-                    print(f"⏭️ User {user.get('username')} already received message this cycle")
-                    
+                if in_cycle:
+                    print(f"⏭️  {username} already received message this cycle, skipping")
+                    continue
+
+                eligible_users.append(user)
+
         except Exception as e:
             print(f"❌ Error in rate limiting: {e}")
         finally:
             mongodb_client.disconnect()
-        
-        print(f"👥 Found {len(eligible_users)} eligible users out of {len(users)} total proactive users")
+
+        print(f"👥 {len(eligible_users)} eligible out of {len(users)} proactive users")
         return eligible_users
     
     def coordinated_send_and_inject(self, message: Dict, users: List[Dict], cycle_id: str) -> Dict:

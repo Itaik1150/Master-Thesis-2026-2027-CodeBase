@@ -1,6 +1,6 @@
 # Lexi — Proactive Experiment System: Full Project Plan
 
-> **Last updated:** April 27, 2026 (Phase 1 & Phase 2 complete — real-phone pilot working end-to-end)  
+> **Last updated:** April 28, 2026 (Phase 3 in progress — 3.1 done, 3.2–3.4 planned)  
 > **Author:** Master Thesis 2026–2027 CodeBase
 
 ---
@@ -15,11 +15,11 @@
 6. [Current Working State](#6-current-working-state-as-of-april-2026)
 7. [Known Bugs & Gaps](#7-known-bugs--gaps)
 8. [Implementation Roadmap](#8-implementation-roadmap)
-   - Phase 1 — Core Bug Fixes
-   - Phase 2 — Real-Phone Pilot Testing (local WiFi / ngrok)
-   - Phase 3 — FCM → Conversation Deep-Link
-   - Phase 4 — Proactive Logic Improvements
-   - Phase 5 — Researcher Dashboard Enhancements
+   - Phase 1 — Core Bug Fixes ✅
+   - Phase 2 — Real-Phone Pilot Testing ✅
+   - Phase 3 — Proactive Logic Improvements ← **current**
+   - Phase 4 — Researcher Dashboard Enhancements
+   - Phase 5 — FCM → Conversation Deep-Link (deferred — UX polish, not a blocker)
    - Phase 6 — Quality & Research
    - Phase 7 — Cloud Deployment (when ready for the real experiment)
 9. [Key Files Quick Reference](#9-key-files-quick-reference)
@@ -346,8 +346,9 @@ Participant in chat screen
 | 5 | `UserContext` dataclass is missing `last_interaction` and `interests` fields used by `decision_engine.py` — causes AttributeError at runtime | `logic-python/core/models.py` | **Medium** |
 | 6 | ~~`fcmTokenUpdatedAt` declared in TypeScript type `IUser` but absent from Mongoose schema — field silently discarded on save~~ | ~~`Lexi/server/src/models/UsersModel.ts`~~ | **Fixed** |
 | 7 | ~~`requirements.txt` is incomplete — missing `firebase-admin`, `requests`; fresh install will fail~~ | ~~`logic-python/requirements.txt`~~ | **Fixed** |
-| 8 | `isProactive` is randomly assigned (50%) regardless of whether the experiment has `proactiveSettings.enabled = true` | `Lexi/server/src/services/users.service.ts` | **Medium** |
-| 9 | No notification scheduling — Python engine must be started manually each time | `logic-python/main.py` | **Medium** |
+| 8 | ~~`isProactive` is randomly assigned (50%) regardless of whether the experiment has `proactiveSettings.enabled = true`~~ | ~~`Lexi/server/src/services/users.service.ts`~~ | **Fixed** |
+| 9 | ~~No notification scheduling — Python engine must be started manually each time~~ | ~~`logic-python/main.py`~~ | **Fixed** |
+| 13 | ~~`dnspython` (used by pymongo for `mongodb+srv://` SRV lookups) uses local/university DNS which blocks Atlas resolution~~ | ~~`logic-python/utils/mongodb_client.py`~~ | **Fixed** |
 | 10 | Notification tap opens `MainActivity` with no context — does not deep-link to the specific conversation the notification was about | `android-app/.../LexiMessagingService.kt` | **Medium** |
 | 11 | No APK generation from the researcher dashboard | Lexi admin + build pipeline | Low (future) |
 | 12 | Firebase service account JSON committed to repository — security risk | `logic-python/services/lexi-72330-firebase-adminsdk-*.json` | **High (security)** |
@@ -504,6 +505,34 @@ Cloud deployment (Phase 7) is only needed when you want the experiment to run fo
 
 ---
 
+#### ⚡ Switching to a different WiFi network (checklist)
+
+Every time you work from a new location, your laptop gets a new IP. Do this:
+
+**Step 1 — Find your new IP**
+```powershell
+ipconfig   # look for IPv4 Address under Wireless LAN adapter Wi-Fi
+```
+
+**Step 2 — Update 4 files** (replace `OLD_IP` with `192.168.31.200`, `NEW_IP` with the new address)
+
+| File | What to change |
+|------|---------------|
+| `Lexi/client/.env.local` | `REACT_APP_API_URL=http://NEW_IP:5000` and `REACT_APP_FRONTEND_URL=http://NEW_IP:3000` |
+| `android-app/app/build.gradle.kts` | `buildConfigField("String", "EXPERIMENT_URL", "\"http://NEW_IP:3000/e/..."` |
+| `Lexi/server/src/server.ts` | `'http://NEW_IP:3000'` in the CORS origins array |
+| `android-app/app/src/main/res/xml/network_security_config.xml` | `<domain ...>NEW_IP</domain>` |
+
+**Step 3 — Restart everything**
+1. Restart the Lexi server (`Ctrl+C` → `npm run dev`)
+2. Restart the React client (`Ctrl+C` → `npm start`)
+3. Rebuild the APK in Android Studio → Build APK → reinstall on phone
+4. Open phone browser and verify: `http://NEW_IP:5000/health` returns OK
+
+> **Tip:** If you always work from the same WiFi at home, set a static IP once (Settings → Network → Wi-Fi → your network → IP settings → Manual → `192.168.31.200`). Then you never need to do this again for that network.
+
+---
+
 #### 2.1 Connect a real phone to the local server
 
 The phone must be able to reach the Lexi server (`port 5000`) and React client (`port 3000`) running on your laptop. Two options:
@@ -539,7 +568,7 @@ Note the two public URLs — they change each time ngrok restarts on the free ti
 
 | Target | `build.gradle.kts` line to uncomment | `Lexi/client/` env |
 |--------|--------------------------------------|---------------------|
-| Real phone (WiFi) | `"http://192.168.31.94:3000/e/69e397f15daf7d1e1d399827"` | `.env.local` present (already created) |
+| Real phone (WiFi) | `"http://192.168.31.200:3000/e/69e397f15daf7d1e1d399827"` | `.env.local` present (already created) |
 | Emulator | `"http://10.0.2.2:3000/e/69e397f15daf7d1e1d399827"` | Delete `.env.local` (`.env` takes over) |
 
 Both commented options are kept in `build.gradle.kts` — just uncomment the one you want and comment out the other. Then sync Gradle and rebuild.
@@ -604,14 +633,223 @@ origin: [
 
 ---
 
+### Phase 3 (Current) — Proactive Logic Improvements
 
-### Phase 3 — FCM → Conversation Deep-Link
+> **This is the current focus.** Priority order: 3.1 ✅ → 3.2 ✅ → 3.3 (candidate pool) → 3.4 (conversation memory + personalization).
+
+---
+
+#### 3.1 Tie `isProactive` to experiment settings ✅ **Done**
+
+**What was changed:** Removed the random 50% assignment. `isProactive` is now set deterministically from `experiment.experimentFeatures.proactiveSettings.enabled` in both `createUser` and `updateFCMToken` (`users.service.ts`). Admin users without an `experimentId` are unaffected.
+
+---
+
+#### 3.2 Scheduling + time window ✅ **Done**
+
+**Problem:** The proactive cycle must currently be triggered manually by running `main.py`.
+
+**Goal:** A standalone daemon (`logic-python/scheduler.py`) that runs `run_full_proactive_cycle()` automatically on a fixed schedule, respecting a daily time window.
+
+**Design decisions:**
+- **Default firing times:** 10:00 and 18:00 (two cycles per day — morning and early evening). These are hardcoded defaults but easily overridden.
+- **Time window:** 09:00–21:00. The scheduler will never fire a cycle outside this window even if the clock would normally trigger it.
+- **Max notifications per day:** 2–3 per user (matches the two default firing times). Enforced in `get_proactive_users_with_rate_limit` by counting today's `proactive_logs` entries per user and skipping users who have already hit the daily cap.
+- **Daily cap default:** `MAX_DAILY_NOTIFICATIONS = 3` — a constant in `scheduler.py`, trivially changeable. A future Phase 4 dashboard task will expose this as a per-experiment UI setting stored in `proactiveSettings`.
+- **Schedule storage:** The two firing times and the daily cap are constants in `scheduler.py` for now. In Phase 4 they will be read from `experiments.experimentFeatures.proactiveSettings`.
+
+**Implementation (`logic-python/scheduler.py`):**
+
+```python
+from apscheduler.schedulers.blocking import BlockingScheduler
+from datetime import datetime
+from services.research_service import research_service
+
+FIRE_TIMES = ["10:00", "18:00"]   # 24h format, local time
+WINDOW_START = 9                   # hour
+WINDOW_END   = 21                  # hour
+MAX_DAILY_NOTIFICATIONS = 3        # easily raised later
+
+def within_window() -> bool:
+    return WINDOW_START <= datetime.now().hour < WINDOW_END
+
+def proactive_job():
+    if not within_window():
+        print("⏸️  Outside time window, skipping cycle")
+        return
+    print(f"⏰ Scheduled cycle starting at {datetime.now().strftime('%H:%M')}")
+    research_service.run_full_proactive_cycle()
+
+scheduler = BlockingScheduler(timezone="Asia/Jerusalem")
+for t in FIRE_TIMES:
+    h, m = map(int, t.split(":"))
+    scheduler.add_job(proactive_job, "cron", hour=h, minute=m)
+
+print(f"🗓️  Scheduler started. Firing at: {', '.join(FIRE_TIMES)}")
+scheduler.start()
+```
+
+**Daily cap enforcement** (in `research_service.py → get_proactive_users_with_rate_limit`):
+
+```python
+from datetime import datetime, timezone
+
+today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+daily_count = mongodb_client.db["proactive_logs"].count_documents({
+    "user_id": user_id,
+    "status": "sent",
+    "timestamp": {"$gte": today_start}
+})
+if daily_count >= MAX_DAILY_NOTIFICATIONS:
+    print(f"⏭️  {username} hit daily cap ({daily_count}), skipping")
+    continue
+```
+
+**To run the scheduler:**
+```bash
+cd logic-python
+python scheduler.py
+```
+
+---
+
+#### 3.3 Candidate message pool (replaces "web search")
+
+**Problem:** Currently the cycle selects one approved message and sends it to every proactive user identically. If the LLM only approves one headline, there is zero variety.
+
+**Goal:** Generate a pool of 4–6 approved candidate messages per cycle (from different topic domains), then in step 3.4 use each user's conversation history to pick the *best-fitting* candidate for that specific user.
+
+**Implementation:**
+
+1. In `run_full_proactive_cycle`, instead of stopping after the first `select_best_message`, collect **all** approved messages (up to 6) across multiple topic/news batches.
+2. Separate news fetching from topic fallback: attempt to generate 3 news-based candidates, then fill remaining slots with topic-based candidates from diverse domains (`technology`, `health`, `travel`, `culture`, `sports`, `nature`).
+3. Store the full candidate pool in memory for the duration of the cycle; pass it into `coordinated_send_and_inject`.
+
+```python
+# Produces a list of up to MAX_CANDIDATES dicts with keys:
+# original_headline, generated_message, source ("news" | "topic"), topic_label
+MAX_CANDIDATES = 6
+
+def build_candidate_pool(self) -> List[Dict]:
+    candidates = []
+    # News-based candidates
+    headlines = self.get_fresh_headlines()
+    for h in headlines:
+        if len(candidates) >= 3:
+            break
+        analysis = self.llm_service.analyze_headline(h)
+        if analysis.get("should_send"):
+            candidates.append({
+                "original_headline": h,
+                "generated_message": analysis["message"],
+                "source": "news",
+                "topic_label": analysis.get("topic", "general")
+            })
+    # Topic-based fill
+    topics = ["technology", "health", "travel", "culture", "sport", "nature", "food", "music"]
+    random.shuffle(topics)
+    for topic in topics:
+        if len(candidates) >= MAX_CANDIDATES:
+            break
+        msg = self.llm_service.generate_topic_message(topic)
+        if msg:
+            candidates.append({
+                "original_headline": f"[topic: {topic}]",
+                "generated_message": msg,
+                "source": "topic",
+                "topic_label": topic
+            })
+    return candidates
+```
+
+---
+
+#### 3.4 Conversation memory + per-user message selection
+
+**Goal:** Personalize which candidate from the pool each user receives, based on topics they have already discussed. This is the step that makes the proactive model research-grade.
+
+**Phase A — Topic exclusion (implement now):**
+
+Per user, before picking a candidate:
+1. Fetch the user's last 5 `proactive_logs` entries → extract `topic_label` values already sent.
+2. Fetch the user's last 5 conversation starters (from `proactive_logs` `generated_message` field, or from the `metadata_conversations` collection's `firstChatSentence`).
+3. Pass the list of used topics to a simple selector: prefer candidates whose `topic_label` is *not* in the used set.
+4. If all candidates were already used (edge case), pick the least-recently-used one.
+
+```python
+def get_best_candidate_for_user(self, user_id: str, candidates: List[Dict]) -> Dict:
+    """Pick the most novel candidate for this user based on recent history."""
+    recent_topics = self._get_recent_topic_labels(user_id, limit=5)
+    unused = [c for c in candidates if c["topic_label"] not in recent_topics]
+    pool = unused if unused else candidates  # fallback: use all if fully exhausted
+    # Among eligible candidates, prefer "news" source over "topic" for variety
+    news_candidates = [c for c in pool if c["source"] == "news"]
+    return news_candidates[0] if news_candidates else pool[0]
+
+def _get_recent_topic_labels(self, user_id: str, limit: int = 5) -> set:
+    logs = list(mongodb_client.db["proactive_logs"].find(
+        {"user_id": user_id, "status": "sent"},
+        sort=[("timestamp", -1)],
+        limit=limit
+    ))
+    return {log.get("topic_label", "") for log in logs}
+```
+
+**Phase B — Response-time personalization (future, after pilot data exists):**
+
+After accumulating pilot data, add a `preferred_send_hours` field to the user document derived from when users actually *responded* to past proactive messages. The scheduler will consult this field to stagger individual sends within the cycle window rather than firing at a fixed time for everyone.
+
+This is intentionally deferred until there is enough real engagement data to make it meaningful. It requires no new infrastructure — only a new method in `research_service.py` and a migration that adds `preferred_send_hours` to the user schema.
+
+---
+
+### Phase 4 — Researcher Dashboard Enhancements
+
+---
+
+#### 4.1 APK generation pipeline
+
+**Goal:** Researcher clicks "Download APK" in the admin dashboard. The server triggers a build with the correct experiment URL (already a production URL from Phase 2) baked into the APK and serves it as a file download.
+
+**Context:** By this phase the production URL format is established (`https://lexi-app.vercel.app/e/<experimentId>`). The APK generation mechanism simply parameterizes the experiment ID portion.
+
+**Implementation approach:**
+
+1. Install Android build tools (Gradle) on the build server or use GitHub Actions.
+2. Add a `/experiments/:id/apk` endpoint to the Lexi server.
+3. When called, the server dispatches a build with the production URL:
+   ```bash
+   ./gradlew assembleRelease \
+     -PEXPERIMENT_URL="https://lexi-app.vercel.app/e/EXPERIMENT_ID" \
+     -PBASE_URL="https://lexi-app.vercel.app"
+   ```
+4. The resulting `.apk` is streamed back to the browser as a file download or served from cloud storage (S3, GCS).
+
+Alternatively, use a GitHub Actions workflow triggered via the GitHub API — on each "generate APK" request the server calls the Actions API with the experiment ID as an input, the workflow builds and uploads the APK as an artifact, and the dashboard polls for the download URL.
+
+---
+
+#### 4.2 Proactive settings UI refinement (`ProactiveSettingsModal.tsx`)
+
+Add configuration fields to the existing proactive settings modal:
+
+- **Schedule:** choose between "every N hours" or "fixed times" (morning / evening)
+- **Agent:** select which AI agent handles proactive conversation-starters
+- **Notification log:** table of sent notifications per participant with open/response rate
+- **Test notification:** button to send a test push to the researcher's own device
+
+---
+
+
+### Phase 5 (Deferred) — FCM → Conversation Deep-Link
+
+> **Deferred to Phase 5.** This is UX polish — the system already works end-to-end and research data is collected correctly without it. The user tapping a notification can navigate to the conversation manually. Implement this before the real experiment launch but after the proactive logic is solid.
 
 This phase makes notification taps land directly in the correct conversation rather than the app's home screen.
 
 ---
 
-#### 3.1 Create conversation in DB before sending FCM
+#### 5.1 Create conversation in DB before sending FCM
 
 **Current behavior:** Python sends FCM and injects `firstChatSentence` but no conversation document exists yet — the conversation is only created when the user opens the app and the chat initializes.
 
@@ -635,7 +873,7 @@ def create_conversation_for_user(self, user_id: str, experiment_id: str) -> str:
 
 ---
 
-#### 3.2 Pass conversation context in FCM data payload
+#### 5.2 Pass conversation context in FCM data payload
 
 **Fix:** Include `experimentId` and `conversationId` in the FCM `data` field alongside the notification:
 
@@ -656,7 +894,7 @@ message = messaging.Message(
 
 ---
 
-#### 3.3 Deep-link from notification tap to conversation
+#### 5.3 Deep-link from notification tap to conversation
 
 **Fix in `LexiMessagingService.kt`:** Extract `conversationId` from `message.data` and build a URL that opens the specific conversation:
 
@@ -686,144 +924,6 @@ private fun showNotification(title: String, body: String, conversationId: String
 ```
 
 `MainActivity.kt` reads `deepLinkUrl` from the intent extras and passes it to the WebView.
-
----
-
-### Phase 4 — Proactive Logic Improvements
-
----
-
-#### 4.1 Tie `isProactive` to experiment settings
-
-**Current behavior:** `isProactive` is randomly assigned to 50% of users with FCM tokens, regardless of whether the experiment is configured as proactive.
-
-**Fix in `users.service.ts`:** Before assigning `isProactive`, check the parent experiment's `proactiveSettings.enabled`:
-
-```typescript
-createUser = async (user: IUser, experimentId: string, fcmToken?: string) => {
-    const [agent, experiment] = await Promise.all([
-        experimentsService.getActiveAgent(experimentId),
-        experimentsService.getExperiment(experimentId),
-    ]);
-    const isExperimentProactive = experiment.experimentFeatures?.proactiveSettings?.enabled ?? false;
-    // ... create user
-    if (fcmToken && isExperimentProactive) {
-        isProactive = this.assignProactiveStatus(); // random within proactive experiments
-    }
-}
-```
-
----
-
-#### 4.2 Add notification scheduling
-
-**Problem:** The proactive cycle must currently be triggered manually by running `main.py`.
-
-**Fix:** Add `APScheduler` to `logic-python/` and configure it to run `run_full_proactive_cycle()` on a schedule read from MongoDB (the experiment's `proactiveSettings.frequency`):
-
-```python
-# logic-python/scheduler.py
-from apscheduler.schedulers.blocking import BlockingScheduler
-from services.research_service import research_service
-
-scheduler = BlockingScheduler()
-
-@scheduler.scheduled_job('interval', hours=2)  # configurable
-def proactive_job():
-    print("Running proactive cycle...")
-    research_service.run_full_proactive_cycle()
-
-scheduler.start()
-```
-
-The frequency (interval in hours, or specific times of day) should be stored in `experiments.experimentFeatures.proactiveSettings.frequency` and read by the Python engine at startup.
-
----
-
-#### 4.3 Conversation memory
-
-**Goal:** Before generating a proactive message for a user, summarize their recent conversation history and pass it to the LLM so repeated or irrelevant topics are avoided.
-
-**Implementation:**
-
-1. In `research_service.py`, before calling `process_headlines`, fetch the user's last N conversations from MongoDB.
-2. Build a short summary (via LLM or simple extraction of last messages).
-3. Include the summary as context in the `analyze_headline` prompt.
-
-```python
-def get_user_conversation_summary(self, user_id: str, limit: int = 5) -> str:
-    """Fetch and summarize recent conversations for a user"""
-    metadata = list(mongodb_client.db["metadata_conversations"].find(
-        {"userId": user_id},
-        sort=[("createdAt", -1)],
-        limit=limit
-    ))
-    # Extract topics discussed and return as a short string
-    topics = [m.get("agent", {}).get("firstChatSentence", "") for m in metadata if m.get("agent")]
-    return "; ".join(filter(None, topics))
-```
-
-Pass the summary into the LLM prompt:
-
-```python
-user_prompt = f"Previous topics discussed with this user: {summary}\n\nAnalyze this headline: '{headline}'"
-```
-
----
-
-#### 4.4 Web search capability
-
-**Goal:** Enrich the proactive engine with the ability to search the web for fresh, personalized content beyond cached news headlines.
-
-**Implementation:**
-
-1. Add a `WebSearchService` in `logic-python/services/web_search_service.py`.
-2. Use a search API (e.g., SerpAPI, DuckDuckGo unofficial API, or Tavily).
-3. Allow the LLM to request a web search when deciding on a proactive message topic.
-
-```python
-class WebSearchService:
-    def search(self, query: str, num_results: int = 5) -> list[dict]:
-        """Search the web and return a list of {title, snippet, url}"""
-        ...
-```
-
----
-
-### Phase 5 — Researcher Dashboard Enhancements
-
----
-
-#### 5.1 APK generation pipeline
-
-**Goal:** Researcher clicks "Download APK" in the admin dashboard. The server triggers a build with the correct experiment URL (already a production URL from Phase 2) baked into the APK and serves it as a file download.
-
-**Context:** By this phase the production URL format is established (`https://lexi-app.vercel.app/e/<experimentId>`). The APK generation mechanism simply parameterizes the experiment ID portion.
-
-**Implementation approach:**
-
-1. Install Android build tools (Gradle) on the build server or use GitHub Actions.
-2. Add a `/experiments/:id/apk` endpoint to the Lexi server.
-3. When called, the server dispatches a build with the production URL:
-   ```bash
-   ./gradlew assembleRelease \
-     -PEXPERIMENT_URL="https://lexi-app.vercel.app/e/EXPERIMENT_ID" \
-     -PBASE_URL="https://lexi-app.vercel.app"
-   ```
-4. The resulting `.apk` is streamed back to the browser as a file download or served from cloud storage (S3, GCS).
-
-Alternatively, use a GitHub Actions workflow triggered via the GitHub API — on each "generate APK" request the server calls the Actions API with the experiment ID as an input, the workflow builds and uploads the APK as an artifact, and the dashboard polls for the download URL.
-
----
-
-#### 5.2 Proactive settings UI refinement (`ProactiveSettingsModal.tsx`)
-
-Add configuration fields to the existing proactive settings modal:
-
-- **Schedule:** choose between "every N hours" or "fixed times" (morning / evening)
-- **Agent:** select which AI agent handles proactive conversation-starters
-- **Notification log:** table of sent notifications per participant with open/response rate
-- **Test notification:** button to send a test push to the researcher's own device
 
 ---
 

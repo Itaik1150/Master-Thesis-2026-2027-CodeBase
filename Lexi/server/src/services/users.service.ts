@@ -10,10 +10,6 @@ import { experimentsService } from './experiments.service';
 dotenv.config();
 
 class UsersService {
-    private assignProactiveStatus = (): boolean => {
-        // Single place for randomization logic
-        return Math.random() < 0.5;
-    };
 
     createAdminUser = async (username: string, password: string): Promise<IUser> => {
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -53,14 +49,14 @@ class UsersService {
             isProactive: false, // Always start false, will be set in updateFCMToken if needed
         });
 
-        // If FCM token was provided during registration, assign proactive status using single helper
+        // If FCM token was provided during registration, assign isProactive based on experiment settings
         if (fcmToken) {
+            const isProactive = experiment.experimentFeatures?.proactiveSettings?.enabled ?? false;
             await UsersModel.updateOne(
                 { _id: res._id },
-                { $set: { isProactive: this.assignProactiveStatus() } }
+                { $set: { isProactive } }
             );
-            const updatedUser = await UsersModel.findById(res._id).lean();
-            console.log(`User ${username} registered with FCM token, assigned isProactive: ${updatedUser.isProactive}`);
+            console.log(`User ${username} registered with FCM token, assigned isProactive: ${isProactive} (experiment proactive: ${isProactive})`);
         }
 
         const savedUser = res.toObject() as IUser;
@@ -194,9 +190,10 @@ class UsersService {
             fcmTokenUpdatedAt: new Date()
         };
         
-        // If this is the first time FCM token is being set, assign proactive status
-        if (!existingUser.fcmToken && fcmToken) {
-            updateData.isProactive = this.assignProactiveStatus();
+        // If this is the first time FCM token is being set, assign isProactive based on experiment settings
+        if (!existingUser.fcmToken && fcmToken && existingUser.experimentId) {
+            const experiment = await experimentsService.getExperiment(existingUser.experimentId);
+            updateData.isProactive = experiment?.experimentFeatures?.proactiveSettings?.enabled ?? false;
             console.log(`✨ User ${userId} got first FCM token, assigned isProactive: ${updateData.isProactive}`);
         }
 
