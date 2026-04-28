@@ -2,12 +2,14 @@
 Minimal Research Service - Basic injection and FCM functionality
 """
 import os
+import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from bson import ObjectId
 
 MAX_DAILY_NOTIFICATIONS = 3  # hard cap per user per day; raised later via dashboard
+MAX_CANDIDATES = 6           # max pool size per cycle (news + topic fill)
 
 from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
@@ -397,7 +399,7 @@ class ResearchService:
         if not self.last_news_fetch:
             return True
         return (datetime.now() - self.last_news_fetch).total_seconds() > self.news_fetch_interval
-    
+
     def get_fresh_headlines(self) -> List[str]:
         """Get fresh headlines or return cached if still valid"""
         if self.should_fetch_news():
@@ -409,40 +411,75 @@ class ResearchService:
             print(f"✅ Fetched {len(self.cached_headlines)} fresh headlines")
         else:
             print(f"📋 Using cached headlines ({len(self.cached_headlines)} available)")
-        
         return self.cached_headlines
-    
-    def process_headlines(self, headlines: List[str]) -> List[Dict]:
-        """Process headlines through LLM and return approved messages"""
-        approved_messages = []
-        
+
+    def build_candidate_pool(self) -> List[Dict]:
+        """
+        Build a pool of up to MAX_CANDIDATES approved messages per cycle.
+
+        Strategy:
+          1. Fetch fresh headlines → run each through LLM → collect up to 3 news candidates.
+          2. Fill remaining slots from a shuffled topic list → collect topic candidates.
+
+        Each candidate dict has:
+          original_headline, generated_message, source ("news"|"topic"),
+          topic_label, timestamp, llm_response
+        """
+        candidates: List[Dict] = []
+
+        # ── News-based candidates (up to 3) ─────────────────────────────────
+        headlines = self.get_fresh_headlines()
         for headline in headlines:
+            if len(candidates) >= 3:
+                break
             print(f"🧠 Analyzing: {headline}")
             analysis = self.llm_service.analyze_headline(headline)
-            
             if analysis.get("should_send"):
-                approved_messages.append({
+                candidates.append({
                     "original_headline": headline,
                     "generated_message": analysis["message"],
+                    "source": "news",
+                    "topic_label": "news",
                     "timestamp": datetime.now(),
-                    "llm_response": analysis
+                    "llm_response": analysis,
                 })
-                print(f"✅ Approved: {analysis['message']}")
+                print(f"✅ News candidate: {analysis['message']}")
             else:
-                print(f"❌ Rejected: Not suitable for proactive messaging")
-        
-        return approved_messages
-    
-    def select_best_message(self, approved_messages: List[Dict]) -> Optional[Dict]:
-        """Select the single best message based on social potential"""
-        if not approved_messages:
+                print(f"❌ Rejected: {headline[:60]}...")
+
+        # ── Topic-based fill (up to MAX_CANDIDATES total) ────────────────────
+        topics = ["technology", "health", "travel", "culture", "sport",
+                  "nature", "food", "music", "books", "cinema"]
+        random.shuffle(topics)
+        for topic in topics:
+            if len(candidates) >= MAX_CANDIDATES:
+                break
+            msg = self.llm_service.generate_topic_message(topic)
+            if msg:
+                candidates.append({
+                    "original_headline": f"[topic: {topic}]",
+                    "generated_message": msg,
+                    "source": "topic",
+                    "topic_label": topic,
+                    "timestamp": datetime.now(),
+                    "llm_response": {"should_send": True, "message": msg},
+                })
+                print(f"💡 Topic candidate [{topic}]: {msg}")
+
+        print(f"🎯 Pool ready: {len(candidates)} candidates "
+              f"({sum(1 for c in candidates if c['source']=='news')} news, "
+              f"{sum(1 for c in candidates if c['source']=='topic')} topic)")
+        return candidates
+
+    def select_message_for_user(self, candidates: List[Dict], user_id: str) -> Optional[Dict]:
+        """
+        Pick the best candidate for a specific user.
+        Phase A (3.3): always returns candidates[0] — uniform for all users.
+        Phase B (3.4): will exclude topics already sent to this user.
+        """
+        if not candidates:
             return None
-        
-        # For now, select the first approved message
-        # In future, could implement scoring based on message length, keywords, etc.
-        best_message = approved_messages[0]
-        print(f"🎯 Selected best message: {best_message['generated_message']}")
-        return best_message
+        return candidates[0]
     
     def get_proactive_users_with_rate_limit(self, cycle_id: str) -> List[Dict]:
         """Get proactive users, skipping those who already hit their daily notification cap."""
@@ -509,8 +546,11 @@ class ResearchService:
         finally:
             mongodb_client.disconnect()
 
-    def coordinated_send_and_inject(self, message: Dict, users: List[Dict], cycle_id: str) -> Dict:
-        """Coordinate FCM send with database injection"""
+    def coordinated_send_and_inject(self, candidates: List[Dict], users: List[Dict], cycle_id: str) -> Dict:
+        """
+        For each eligible user, pick the best candidate from the pool,
+        send FCM, and inject the message as firstChatSentence.
+        """
         results = {
             "fcm_sent": 0,
             "fcm_failed": 0,
@@ -518,14 +558,22 @@ class ResearchService:
             "injection_failed": 0,
             "details": []
         }
-        
-        print(f"📱 Sending FCM notifications to {len(users)} users...")
-        
+
+        print(f"📱 Sending to {len(users)} users from pool of {len(candidates)} candidates...")
+
         for user in users:
             user_id = str(user["_id"])
             username = user.get('username', 'Unknown')
             fcm_token = user["fcmToken"]
-            
+
+            # Pick the best candidate for this specific user
+            message = self.select_message_for_user(candidates, user_id)
+            if not message:
+                print(f"⚠️  No candidate available for {username}, skipping")
+                continue
+
+            print(f"\n👤 {username} → [{message['source']}:{message['topic_label']}] {message['generated_message']}")
+
             try:
                 # Step 1: Send FCM notification
                 from core.models import UserContext
@@ -538,39 +586,37 @@ class ResearchService:
                     body=message["generated_message"],
                     title="נושא שיחה חדש"
                 )
-                
+
                 if notification_result:
                     results["fcm_sent"] += 1
                     print(f"✅ FCM sent to {username}")
-                    
+
                     # Step 2: Inject message only after successful FCM
                     injection_result = self.inject_prompt(user_id, message["generated_message"])
-                    
+
                     if injection_result:
                         results["injected"] += 1
                         print(f"💬 Message injected for {username}")
-                        
+
                         # Step 3: Log success (reconnect — inject_prompt closed the client)
                         self.log_proactive_event(cycle_id, user_id, message, "sent", notification_result)
                     else:
                         results["injection_failed"] += 1
                         print(f"❌ Injection failed for {username}")
-                        
                 else:
                     results["fcm_failed"] += 1
                     print(f"❌ FCM failed for {username}")
-                    
+
             except Exception as e:
                 results["fcm_failed"] += 1
                 error_msg = str(e)
                 print(f"❌ Error processing user {username}: {e}")
 
-                # Auto-cleanup: Firebase "not found" means the token is stale (app
-                # was reinstalled or cache was cleared). Remove it so it's not retried.
+                # Auto-cleanup: stale token (app reinstalled / cache cleared)
                 if "not found" in error_msg.lower() or "registration-token-not-registered" in error_msg.lower():
                     print(f"🗑️  Stale token detected for {username} — removing from DB")
                     self.clear_stale_fcm_token(user_id, username)
-        
+
         return results
     
     def log_proactive_event(self, cycle_id: str, user_id: str, message: Dict, status: str, notification_id: str = None):
@@ -603,81 +649,42 @@ class ResearchService:
         """Main orchestrator for proactive research cycle"""
         cycle_id = str(uuid.uuid4())
         start_time = datetime.now()
-        
+
         print(f"\n=== 🚀 Starting Proactive Cycle {cycle_id[:8]}... ===")
-        
+
         try:
-            # Step 1: Get fresh headlines
-            headlines = self.get_fresh_headlines()
-            
-            if not headlines:
-                print("❌ No headlines available")
-                return {"success": False, "message": "No headlines available"}
-            
-            # Step 2: Process through LLM — retry with fresh fetch if all rejected
-            approved_messages = self.process_headlines(headlines)
+            # Step 1: Build candidate pool (news + topic fill)
+            candidates = self.build_candidate_pool()
 
-            if not approved_messages:
-                print("⚠️ First batch rejected — fetching fresh headlines and retrying...")
-                self.last_news_fetch = None  # bypass cache
-                headlines = self.get_fresh_headlines()
-                approved_messages = self.process_headlines(headlines)
+            if not candidates:
+                print("❌ Could not build any candidates")
+                return {"success": False, "message": "No candidates generated"}
 
-            if not approved_messages:
-                print("⚠️ News rejected — generating topic-based message as fallback...")
-                import random
-                fallback_topics = [
-                    "artificial intelligence", "travel", "food and cooking",
-                    "music", "books", "sport", "movies", "nature",
-                ]
-                topic = random.choice(fallback_topics)
-                print(f"🎲 Selected topic: {topic}")
-                fallback_message = self.llm_service.generate_topic_message(topic)
-                if fallback_message:
-                    approved_messages = [{
-                        "original_headline": f"[topic fallback: {topic}]",
-                        "generated_message": fallback_message,
-                        "timestamp": datetime.now(),
-                        "llm_response": {"should_send": True, "message": fallback_message}
-                    }]
-                    print(f"✅ Fallback message: {fallback_message}")
-                else:
-                    print("❌ No messages approved by LLM after retry and fallback")
-                    return {"success": False, "message": "No messages approved by LLM"}
-            
-            # Step 3: Select single best message (one per cycle)
-            best_message = self.select_best_message(approved_messages)
-            
-            if not best_message:
-                print("❌ No best message selected")
-                return {"success": False, "message": "No best message selected"}
-            
-            # Step 4: Get eligible users
+            # Step 2: Get eligible users (rate-limit checked)
             eligible_users = self.get_proactive_users_with_rate_limit(cycle_id)
-            
+
             if not eligible_users:
                 print("❌ No eligible users found")
                 return {"success": False, "message": "No eligible users found"}
-            
-            # Step 5: Send and inject
-            results = self.coordinated_send_and_inject(best_message, eligible_users, cycle_id)
-            
-            # Step 6: Log cycle completion
+
+            # Step 3: Send and inject (per-user candidate selection inside)
+            results = self.coordinated_send_and_inject(candidates, eligible_users, cycle_id)
+
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
-            
+
             print(f"\n✅ Proactive Cycle Complete!")
             print(f"📊 Results: {results['fcm_sent']} FCM sent, {results['injected']} injected")
             print(f"⏱️ Duration: {duration:.2f} seconds")
-            
+
             return {
                 "success": True,
                 "cycle_id": cycle_id,
                 "results": results,
                 "duration": duration,
-                "message_used": best_message
+                "candidates_built": len(candidates),
             }
-            
+
         except Exception as e:
             print(f"❌ Proactive cycle failed: {e}")
             return {

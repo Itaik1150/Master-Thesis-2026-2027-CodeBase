@@ -635,7 +635,7 @@ origin: [
 
 ### Phase 3 (Current) — Proactive Logic Improvements
 
-> **This is the current focus.** Priority order: 3.1 ✅ → 3.2 ✅ → 3.3 (candidate pool) → 3.4 (conversation memory + personalization).
+> **This is the current focus.** Priority order: 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4 (conversation memory + personalization).
 
 ---
 
@@ -713,7 +713,7 @@ python scheduler.py
 
 ---
 
-#### 3.3 Candidate message pool (replaces "web search")
+#### 3.3 Candidate message pool ✅ **Done**
 
 **Problem:** Currently the cycle selects one approved message and sends it to every proactive user identically. If the LLM only approves one headline, there is zero variety.
 

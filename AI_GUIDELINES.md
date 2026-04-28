@@ -55,7 +55,7 @@ Always consider how changes affect all components.
 
 Current Task:
 
-3.3 Build candidate message pool (Phase 3 — Proactive Logic Improvements)
+3.4 Conversation memory + per-user message selection (Phase 3 — Proactive Logic Improvements)
 
 
 Project Context:

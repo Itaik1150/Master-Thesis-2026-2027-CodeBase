@@ -7,7 +7,7 @@ start "Lexi Server" cmd /k "cd /d "%PROJECT_DIR%\Lexi\server" && npm run dev"
 
 start "Lexi Client" cmd /k "cd /d "%PROJECT_DIR%\Lexi\client" && npm start"
 
-start "Android Emulator" cmd /k ""%LOCALAPPDATA%\Android\Sdk\emulator\emulator.exe" -avd Medium_Phone"
+@REM start "Android Emulator" cmd /k ""%LOCALAPPDATA%\Android\Sdk\emulator\emulator.exe" -avd Medium_Phone"
 
 timeout /t 20
 
