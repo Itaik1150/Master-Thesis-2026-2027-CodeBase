@@ -10,6 +10,7 @@ from bson import ObjectId
 
 MAX_DAILY_NOTIFICATIONS = 3  # hard cap per user per day; raised later via dashboard
 MAX_CANDIDATES = 6           # max pool size per cycle (news + topic fill)
+MEMORY_TOPICS_LIMIT = 5     # how many recent sent topics to remember per user
 
 from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
@@ -471,15 +472,55 @@ class ResearchService:
               f"{sum(1 for c in candidates if c['source']=='topic')} topic)")
         return candidates
 
-    def select_message_for_user(self, candidates: List[Dict], user_id: str) -> Optional[Dict]:
+    def build_basic_memory(self, user: Dict) -> Dict:
         """
-        Pick the best candidate for a specific user.
-        Phase A (3.3): always returns candidates[0] — uniform for all users.
-        Phase B (3.4): will exclude topics already sent to this user.
+        3.4a: Build lightweight memory for a user with no LLM calls.
+        Reads demographics from the user document and recent sent topics
+        from proactive_logs. MongoDB must already be connected by the caller.
+        """
+        user_id = str(user["_id"])
+        recent_logs = list(mongodb_client.db["proactive_logs"].find(
+            {"user_id": user_id, "status": "sent"},
+            sort=[("timestamp", -1)],
+            limit=MEMORY_TOPICS_LIMIT
+        ))
+        topics_sent = [log.get("topic_label", "general") for log in recent_logs]
+
+        return {
+            "demographics": {
+                "name": user.get("username", ""),
+                "age": user.get("age"),
+                "gender": user.get("gender"),
+            },
+            "topics_sent_recently": topics_sent,
+        }
+
+    def select_message_for_user(self, candidates: List[Dict], memory: Dict) -> Optional[Dict]:
+        """
+        Pick the best candidate for a specific user using their basic memory.
+        Prefers candidates whose topic_label was not recently sent to this user.
+        Falls back to candidates[0] if all topics were already used.
         """
         if not candidates:
             return None
-        return candidates[0]
+
+        recently_sent = set(memory.get("topics_sent_recently", []))
+
+        # Prefer candidates on topics not recently sent
+        unused = [c for c in candidates if c["topic_label"] not in recently_sent]
+
+        if unused:
+            # Among unused, prefer news over topic for variety
+            news = [c for c in unused if c["source"] == "news"]
+            chosen = news[0] if news else unused[0]
+        else:
+            # All topics exhausted — pick candidates[0] as safe fallback
+            print(f"⚠️  All candidate topics were recently sent, using fallback")
+            chosen = candidates[0]
+
+        print(f"🎯 Selected [{chosen['source']}:{chosen['topic_label']}] "
+              f"(excluded: {recently_sent or 'none'})")
+        return chosen
     
     def get_proactive_users_with_rate_limit(self, cycle_id: str) -> List[Dict]:
         """Get proactive users, skipping those who already hit their daily notification cap."""
@@ -566,8 +607,20 @@ class ResearchService:
             username = user.get('username', 'Unknown')
             fcm_token = user["fcmToken"]
 
-            # Pick the best candidate for this specific user
-            message = self.select_message_for_user(candidates, user_id)
+            # Build basic memory (3.4a): demographics + recent sent topics
+            # Needs a fresh connection since previous steps may have closed it.
+            memory = {}
+            try:
+                if mongodb_client.connect():
+                    memory = self.build_basic_memory(user)
+                    print(f"🧠 Memory for {username}: sent={memory.get('topics_sent_recently', [])}")
+            except Exception as e:
+                print(f"⚠️  Could not build memory for {username}: {e}")
+            finally:
+                mongodb_client.disconnect()
+
+            # Pick the best candidate for this user based on their memory
+            message = self.select_message_for_user(candidates, memory)
             if not message:
                 print(f"⚠️  No candidate available for {username}, skipping")
                 continue

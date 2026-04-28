@@ -635,7 +635,7 @@ origin: [
 
 ### Phase 3 (Current) — Proactive Logic Improvements
 
-> **This is the current focus.** Priority order: 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4 (conversation memory + personalization).
+> **This is the current focus.** Priority order: 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4a ✅ → 3.4b (LLM conversation extraction) → 3.4c (memory-aware message generation) → 3.4d (engagement tracking).
 
 ---
 
@@ -764,42 +764,172 @@ def build_candidate_pool(self) -> List[Dict]:
 
 ---
 
-#### 3.4 Conversation memory + per-user message selection
+#### 3.4 Conversation memory + per-user message generation
 
-**Goal:** Personalize which candidate from the pool each user receives, based on topics they have already discussed. This is the step that makes the proactive model research-grade.
+**Goal:** Give the proactive model a persistent, growing memory of each user so that messages feel personal — like a trusted assistant that remembers past conversations, knows the user's interests, and never repeats itself.
 
-**Phase A — Topic exclusion (implement now):**
+---
 
-Per user, before picking a candidate:
-1. Fetch the user's last 5 `proactive_logs` entries → extract `topic_label` values already sent.
-2. Fetch the user's last 5 conversation starters (from `proactive_logs` `generated_message` field, or from the `metadata_conversations` collection's `firstChatSentence`).
-3. Pass the list of used topics to a simple selector: prefer candidates whose `topic_label` is *not* in the used set.
-4. If all candidates were already used (edge case), pick the least-recently-used one.
+##### Design decisions
 
-```python
-def get_best_candidate_for_user(self, user_id: str, candidates: List[Dict]) -> Dict:
-    """Pick the most novel candidate for this user based on recent history."""
-    recent_topics = self._get_recent_topic_labels(user_id, limit=5)
-    unused = [c for c in candidates if c["topic_label"] not in recent_topics]
-    pool = unused if unused else candidates  # fallback: use all if fully exhausted
-    # Among eligible candidates, prefer "news" source over "topic" for variety
-    news_candidates = [c for c in pool if c["source"] == "news"]
-    return news_candidates[0] if news_candidates else pool[0]
+- **Storage:** A `proactiveMemory` object is embedded directly in each user's document in the `users` MongoDB collection (no new collection). Python writes it via `$set`; the Node.js server can expose it in Phase 4 by adding the field to the `IUser` TypeScript type.
+- **Refresh cadence:** Memory is rebuilt at the start of every proactive cycle, per user. If this proves too slow for large user groups, a 24-hour cache (one field `last_updated`) makes the change trivial.
+- **Demographics used:** `username` (name), `age`, `gender` only. Marital status and children are excluded — the conversation content itself is a richer signal.
+- **Language:** Detected from the user's most recent conversations (ratio of Hebrew to Latin characters). Defaults to Hebrew. Messages are generated in the detected language.
+- **Phase 4 compatibility:** All configurable values (`MEMORY_CONVERSATIONS_LIMIT`, `MEMORY_TOPICS_LIMIT`) are module-level constants in `research_service.py` for now. They will move to `experiments.experimentFeatures.proactiveSettings` and become editable in the dashboard in Phase 4.
+- **Privacy:** Participants are informed in advance that their conversations are used by the AI to personalize interactions (research consent covers this).
 
-def _get_recent_topic_labels(self, user_id: str, limit: int = 5) -> set:
-    logs = list(mongodb_client.db["proactive_logs"].find(
-        {"user_id": user_id, "status": "sent"},
-        sort=[("timestamp", -1)],
-        limit=limit
-    ))
-    return {log.get("topic_label", "") for log in logs}
+---
+
+##### `proactiveMemory` document shape (written to `users` collection)
+
+```json
+{
+  "proactiveMemory": {
+    "last_updated": "2026-04-28T19:00:00Z",
+    "preferred_language": "he",
+    "demographics": {
+      "name": "John",
+      "age": 25,
+      "gender": "male"
+    },
+    "interests": ["cooking", "hiking", "movies"],
+    "future_mentions": ["trip to Eilat next month"],
+    "topics_sent_recently": ["food", "travel", "sport"],
+    "conversation_insight": "מדבר בקצרה, פתוח לשיחות על אוכל וטיולים, הזכיר שהוא אוהב לבשל"
+  }
+}
 ```
 
-**Phase B — Response-time personalization (future, after pilot data exists):**
+---
 
-After accumulating pilot data, add a `preferred_send_hours` field to the user document derived from when users actually *responded* to past proactive messages. The scheduler will consult this field to stagger individual sends within the cycle window rather than firing at a fixed time for everyone.
+##### Implementation steps (run every proactive cycle, per user)
 
-This is intentionally deferred until there is enough real engagement data to make it meaningful. It requires no new infrastructure — only a new method in `research_service.py` and a migration that adds `preferred_send_hours` to the user schema.
+**3.4a — Build basic memory (no LLM)** ✅ **Done**
+
+Sources: `users` document (demographics) + last N entries from `proactive_logs` (sent topics).
+
+```python
+MEMORY_TOPICS_LIMIT = 5   # how many recent sent topics to remember
+
+def build_basic_memory(self, user: Dict) -> Dict:
+    user_id = str(user["_id"])
+    recent_logs = list(mongodb_client.db["proactive_logs"].find(
+        {"user_id": user_id, "status": "sent"},
+        sort=[("timestamp", -1)],
+        limit=MEMORY_TOPICS_LIMIT
+    ))
+    topics_sent = [log.get("topic_label", "general") for log in recent_logs]
+    return {
+        "demographics": {
+            "name": user.get("username", ""),
+            "age": user.get("age"),
+            "gender": user.get("gender"),
+        },
+        "topics_sent_recently": topics_sent,
+    }
+```
+
+**3.4b — Extract interests + language from conversations (LLM)**
+
+Sources: `metadata_conversations` to find recent conversation IDs for this user → `conversations` to fetch actual messages → one LLM call to extract structured insights.
+
+```python
+MEMORY_CONVERSATIONS_LIMIT = 3   # how many past conversations to read
+
+def extract_conversation_memory(self, user_id: str) -> Dict:
+    """
+    Fetch the user's last N conversations and ask the LLM to extract:
+    interests, future mentions, one-sentence insight, and preferred language.
+    Returns a dict to be merged into proactiveMemory.
+    """
+    # 1. Get recent conversation IDs
+    recent_meta = list(mongodb_client.db["metadata_conversations"].find(
+        {"userId": user_id},
+        sort=[("createdAt", -1)],
+        limit=MEMORY_CONVERSATIONS_LIMIT
+    ))
+    if not recent_meta:
+        return {"interests": [], "future_mentions": [], "conversation_insight": "", "preferred_language": "he"}
+
+    # 2. Collect user messages from each conversation
+    all_user_messages = []
+    for meta in recent_meta:
+        conv_id = str(meta["_id"])
+        messages = list(mongodb_client.db["conversations"].find(
+            {"conversationId": conv_id, "role": "user"}
+        ))
+        all_user_messages.extend([m["content"] for m in messages])
+
+    if not all_user_messages:
+        return {"interests": [], "future_mentions": [], "conversation_insight": "", "preferred_language": "he"}
+
+    # 3. Detect language (ratio of Hebrew characters)
+    combined_text = " ".join(all_user_messages)
+    hebrew_chars = sum(1 for c in combined_text if '\u05d0' <= c <= '\u05ea')
+    preferred_language = "he" if hebrew_chars > len(combined_text) * 0.1 else "en"
+
+    # 4. Ask LLM to extract insights (one call)
+    extracted = self.llm_service.extract_user_memory(all_user_messages, preferred_language)
+    extracted["preferred_language"] = preferred_language
+    return extracted
+```
+
+The LLM method `extract_user_memory` (added to `llm_service.py`) sends the collected messages with a prompt like:
+
+> *"You are analyzing conversation history for a research assistant. From these messages, extract in JSON: interests (list of topics the user seems to care about), future_mentions (events or plans they mentioned), conversation_insight (one sentence in [language] summarizing their communication style and personality)."*
+
+**3.4c — Write memory to MongoDB**
+
+After building the memory dict (3.4a + 3.4b merged), write it to the user document:
+
+```python
+def save_user_memory(self, user_id: str, memory: Dict):
+    memory["last_updated"] = datetime.now(timezone.utc)
+    mongodb_client.db[mongodb_client.users_collection].update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": {"proactiveMemory": memory}}
+    )
+```
+
+**3.4d — Use memory in per-user message generation**
+
+Replace the current `select_message_for_user()` (which returns `candidates[0]`) with a memory-aware generator:
+
+1. Read `user.proactiveMemory` (just set in 3.4c).
+2. Filter candidate pool: exclude candidates whose `topic_label` is in `topics_sent_recently`.
+3. From remaining candidates, pick the best-fitting one based on user interests.
+4. Generate the final message text with memory context passed to the LLM:
+
+```
+"Generate a short [language] conversation starter.
+User: [name], [age] years old, [gender].
+Known interests: [interests].
+Recent insight: [conversation_insight].
+Topics already sent recently (avoid): [topics_sent_recently].
+Future mentions to reference if natural: [future_mentions].
+Preferred topic from pool: [selected topic_label].
+Max 15 words. Friendly and open-ended."
+```
+
+This replaces the generic `generate_topic_message(topic)` with a fully personalized call — same number of LLM calls, drastically better output.
+
+---
+
+##### Fallback rules
+
+- If user has no conversation history → use demographics + sent topics only (3.4a).
+- If all candidate topics were already sent → pick the least-recently-sent one.
+- If LLM extraction fails → use basic memory only (no interests/insight).
+- If memory is missing entirely → fall back to current behavior (`candidates[0]`).
+
+---
+
+##### Phase B — Response-time personalization (deferred)
+
+After accumulating pilot data, derive `preferred_send_hours` per user from when they actually responded to past proactive messages. The scheduler will use this to stagger sends within the daily window rather than sending everyone at 10:00 and 18:00.
+
+Intentionally deferred until real engagement data exists. No infrastructure change needed — only a new method in `research_service.py`.
 
 ---
 
