@@ -43,7 +43,7 @@ const setupServer = () => {
             'http://10.0.2.2:3000',
             'http://127.0.0.1:3000',
             'http://0.0.0.0:3000',
-            'http://192.168.31.94:3000',  // real phone WiFi testing
+            'http://192.168.31.200:3000',  // real phone WiFi testing (static IP)
         ],
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],

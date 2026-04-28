@@ -5,6 +5,13 @@ import os
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional
+import dns.resolver
+
+# Force dnspython to use Google DNS so mongodb+srv:// SRV lookups work
+# even when the local/university DNS server blocks Atlas resolution.
+_resolver = dns.resolver.Resolver(configure=False)
+_resolver.nameservers = ['8.8.8.8', '8.8.4.4']
+dns.resolver.default_resolver = _resolver
 
 # Load environment variables
 load_dotenv()

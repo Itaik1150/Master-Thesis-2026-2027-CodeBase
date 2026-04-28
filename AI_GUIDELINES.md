@@ -55,7 +55,7 @@ Always consider how changes affect all components.
 
 Current Task:
 
-Phase 2 complete — move to Phase 3 (FCM → Conversation Deep-Link)
+3.3 Build candidate message pool (Phase 3 — Proactive Logic Improvements)
 
 
 Project Context:

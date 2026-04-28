@@ -23,7 +23,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // REAL PHONE (WiFi): use line below
-        buildConfigField("String", "EXPERIMENT_URL", "\"http://192.168.31.94:3000/e/69e397f15daf7d1e1d399827\"")
+        buildConfigField("String", "EXPERIMENT_URL", "\"http://192.168.31.200:3000/e/69e397f15daf7d1e1d399827\"")
         // EMULATOR: swap to this line instead (comment out the one above)
         // buildConfigField("String", "EXPERIMENT_URL", "\"http://10.0.2.2:3000/e/69e397f15daf7d1e1d399827\"")
     }
