@@ -494,6 +494,21 @@ class ResearchService:
         print(f"👥 {len(eligible_users)} eligible out of {len(users)} proactive users")
         return eligible_users
     
+    def clear_stale_fcm_token(self, user_id: str, username: str):
+        """Remove an invalid FCM token from MongoDB so it isn't retried."""
+        try:
+            if not mongodb_client.connect():
+                return
+            mongodb_client.db[mongodb_client.users_collection].update_one(
+                {"_id": ObjectId(user_id)},
+                {"$unset": {"fcmToken": ""}, "$set": {"isProactive": False}}
+            )
+            print(f"🗑️  Cleared stale FCM token for {username}")
+        except Exception as e:
+            print(f"❌ Error clearing stale token for {username}: {e}")
+        finally:
+            mongodb_client.disconnect()
+
     def coordinated_send_and_inject(self, message: Dict, users: List[Dict], cycle_id: str) -> Dict:
         """Coordinate FCM send with database injection"""
         results = {
@@ -508,6 +523,7 @@ class ResearchService:
         
         for user in users:
             user_id = str(user["_id"])
+            username = user.get('username', 'Unknown')
             fcm_token = user["fcmToken"]
             
             try:
@@ -516,7 +532,7 @@ class ResearchService:
                 notification_result = self.fcm_service.send_to_user(
                     user=UserContext(
                         user_id=user_id,
-                        name=user.get('username', 'Unknown'),
+                        name=username,
                         fcm_token=fcm_token
                     ),
                     body=message["generated_message"],
@@ -525,49 +541,63 @@ class ResearchService:
                 
                 if notification_result:
                     results["fcm_sent"] += 1
-                    print(f"✅ FCM sent to {user.get('username')}")
+                    print(f"✅ FCM sent to {username}")
                     
                     # Step 2: Inject message only after successful FCM
                     injection_result = self.inject_prompt(user_id, message["generated_message"])
                     
                     if injection_result:
                         results["injected"] += 1
-                        print(f"💬 Message injected for {user.get('username')}")
+                        print(f"💬 Message injected for {username}")
                         
-                        # Step 3: Log success
+                        # Step 3: Log success (reconnect — inject_prompt closed the client)
                         self.log_proactive_event(cycle_id, user_id, message, "sent", notification_result)
                     else:
                         results["injection_failed"] += 1
-                        print(f"❌ Injection failed for {user.get('username')}")
+                        print(f"❌ Injection failed for {username}")
                         
                 else:
                     results["fcm_failed"] += 1
-                    print(f"❌ FCM failed for {user.get('username')}")
+                    print(f"❌ FCM failed for {username}")
                     
             except Exception as e:
                 results["fcm_failed"] += 1
-                print(f"❌ Error processing user {user.get('username')}: {e}")
+                error_msg = str(e)
+                print(f"❌ Error processing user {username}: {e}")
+
+                # Auto-cleanup: Firebase "not found" means the token is stale (app
+                # was reinstalled or cache was cleared). Remove it so it's not retried.
+                if "not found" in error_msg.lower() or "registration-token-not-registered" in error_msg.lower():
+                    print(f"🗑️  Stale token detected for {username} — removing from DB")
+                    self.clear_stale_fcm_token(user_id, username)
         
         return results
     
     def log_proactive_event(self, cycle_id: str, user_id: str, message: Dict, status: str, notification_id: str = None):
         """Log proactive event for research analysis"""
         try:
+            if not mongodb_client.connect():
+                print("❌ Could not connect to MongoDB for logging")
+                return
+
             log_entry = {
                 "cycle_id": cycle_id,
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "user_id": user_id,
                 "original_headline": message["original_headline"],
                 "generated_message": message["generated_message"],
+                "topic_label": message.get("topic_label", "general"),
                 "status": status,
                 "notification_id": notification_id,
                 "llm_response": message.get("llm_response", {})
             }
-            
+
             mongodb_client.db["proactive_logs"].insert_one(log_entry)
-            
+
         except Exception as e:
             print(f"❌ Error logging proactive event: {e}")
+        finally:
+            mongodb_client.disconnect()
     
     def run_full_proactive_cycle(self) -> Dict:
         """Main orchestrator for proactive research cycle"""
