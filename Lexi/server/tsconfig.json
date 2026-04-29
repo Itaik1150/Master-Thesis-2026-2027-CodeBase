@@ -45,6 +45,7 @@
     /* Module Resolution Options */
     "moduleResolution": "node",
     "ignoreDeprecations": "6.0",
+    "baseUrl": "./src",
     // "paths": {
     //     "@db/*": ["db/*"],
     //     "@business-logic/*": ["business-logic/*"],
