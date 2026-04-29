@@ -42,7 +42,7 @@
     // "noUncheckedIndexedAccess": true,      /* Include 'undefined' in index signature results */
     /* Module Resolution Options */
     "moduleResolution": "node",
-    "ignoreDeprecations": "5.0",
+    "ignoreDeprecations": "6.0",
     // "paths": {
     //     "@db/*": ["db/*"],
     //     "@business-logic/*": ["business-logic/*"],
