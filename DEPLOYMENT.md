@@ -102,11 +102,16 @@ Go to [render.com](https://render.com) → sign in with GitHub.
 Scroll down to **Environment Variables** on the same page and add:
 
 ```
-MONGODB_URL        = mongodb+srv://itaik1150_db_user:...@cluster0...    (from your logic-python/.env)
-JWT_SECRET_KEY     = (same value you use locally)
-OPENAI_API_KEY     = (same value you use locally)
-FRONTEND_URL       = https://master-thesis-2026-2027-code-base.vercel.app
-NODE_ENV           = production
+MONGODB_URL      = mongodb+srv://itaik1150_db_user:<PASSWORD>@cluster0.6xv1izi.mongodb.net
+                   ⚠️ URL must end at the hostname — NO trailing slash, NO ?appName=... params.
+                      The code appends /LexiDB itself. If you include ?appName=Cluster0 the DB name breaks.
+MONGODB_DB_NAME  = LexiDB
+MONGODB_USER     = itaik1150_db_user
+MONGODB_PASSWORD = <your Atlas password>
+JWT_SECRET_KEY   = (same value you use locally)
+OPENAI_API_KEY   = (same value you use locally)
+FRONTEND_URL     = https://master-thesis-2026-2027-code-base.vercel.app
+NODE_ENV         = production
 ```
 
 > **Note:** Render automatically assigns a PORT — do not set it manually.
