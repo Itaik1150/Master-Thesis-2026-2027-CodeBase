@@ -105,7 +105,7 @@ Scroll down to **Environment Variables** on the same page and add:
 MONGODB_URL      = mongodb+srv://itaik1150_db_user:<PASSWORD>@cluster0.6xv1izi.mongodb.net
                    ⚠️ URL must end at the hostname — NO trailing slash, NO ?appName=... params.
                       The code appends /LexiDB itself. If you include ?appName=Cluster0 the DB name breaks.
-MONGODB_DB_NAME  = LexiDB
+MONGODB_DB_NAME  = test
 MONGODB_USER     = itaik1150_db_user
 MONGODB_PASSWORD = <your Atlas password>
 JWT_SECRET_KEY   = (same value you use locally)
