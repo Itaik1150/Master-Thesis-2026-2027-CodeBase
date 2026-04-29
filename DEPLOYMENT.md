@@ -1,5 +1,8 @@
 # Lexi — Cloud Deployment Guide
 
+> **Status: ✅ Fully deployed as of April 29, 2026.**
+> All steps below are complete. This file is kept as a reference for future changes and troubleshooting.
+>
 > **Goal:** Deploy the Lexi web app to public URLs so the Android APK works from any network (edu WiFi, home, mobile data) and your supervisor can use the app without any local setup.
 
 ## What gets deployed where
@@ -151,10 +154,16 @@ origin: [
 
 Commit and push — Render will auto-redeploy.
 
-### 3.3 Test in browser
+### 3.3 Test in browser ✅
 Open `https://master-thesis-2026-2027-code-base.vercel.app/e/69e397f15daf7d1e1d399827` in your phone's browser.
 - The experiment page should load ✅
 - Try registering → user should appear in MongoDB Atlas ✅
+
+### 3.4 Key lessons learned during deployment
+- **MongoDB DB name:** The real Atlas database is named `test` (not `LexiDB`). All collections live there.
+- **MONGODB_URL format:** Must end at the hostname with NO trailing `/` or `?appName=...` params. The code appends `/{DB_NAME}` itself.
+- **Vercel env vars:** `REACT_APP_*` vars are baked in at build time. Always redeploy after changing them.
+- **CORS:** Always use the production URL `master-thesis-2026-2027-code-base.vercel.app` — Vercel preview URLs (with random suffixes) are also allowed by the server's CORS wildcard rule.
 
 ---
 

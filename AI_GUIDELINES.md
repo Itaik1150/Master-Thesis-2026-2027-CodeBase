@@ -55,7 +55,16 @@ Always consider how changes affect all components.
 
 Current Task:
 
-3.4b LLM conversation extraction (Phase 3 — Proactive Logic Improvements)
+3.4b — LLM conversation extraction (Phase 3 — Proactive Logic Improvements)
+
+Goal: For each proactive user, fetch their recent conversation messages from MongoDB
+(via metadata_conversations → conversations), then call the LLM once to extract:
+- interests (list of topics the user cares about)
+- future_mentions (events/plans they mentioned)
+- conversation_insight (one sentence summarizing communication style + language)
+
+Store these in a `proactiveMemory` dict to be merged with the basic memory from 3.4a.
+See PLAN.md section 3.4b for the full spec.
 
 
 Project Context:
