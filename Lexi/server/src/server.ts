@@ -40,6 +40,7 @@ const setupServer = () => {
     const corsOptions = {
         origin: [
             process.env.FRONTEND_URL || 'http://localhost:3000',
+            'https://master-thesis-2026-2027-code-base.vercel.app',  // production
             'http://10.0.2.2:3000',
             'http://127.0.0.1:3000',
             'http://0.0.0.0:3000',
