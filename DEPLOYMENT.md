@@ -57,11 +57,10 @@ Go to [vercel.com](https://vercel.com) → sign in with GitHub.
 Before clicking Deploy, go to **Environment Variables** and add:
 
 ```
-REACT_APP_API_URL        = https://YOUR-RAILWAY-URL.railway.app    ← fill in after step 2
-REACT_APP_FRONTEND_URL   = https://YOUR-PROJECT.vercel.app          ← Vercel will show you this
+REACT_APP_API_URL        = https://lexi-server-1rx9.onrender.com
+REACT_APP_FRONTEND_URL   = https://master-thesis-2026-2027-code-base.vercel.app
+CI                       = false
 ```
-
-> **Note:** `REACT_APP_API_URL` points to the Railway server. You can set a placeholder now and update it after step 2.
 
 ### 1.4 Deploy
 Click **Deploy**. Vercel will build and deploy.
@@ -77,14 +76,8 @@ Click **Deploy**. Vercel will build and deploy.
 > | `...-git-main-...vercel.app` | Branch preview — ignore |
 > | `...-5rjl30urv-...vercel.app` | One-time deployment preview — ignore |
 >
-> **⚠️ TODO after Render is deployed:**
-> Come back to Vercel → Settings → Environment Variables and set:
-> ```
-> REACT_APP_API_URL    = https://YOUR-RENDER-URL.onrender.com
-> REACT_APP_FRONTEND_URL = https://master-thesis-2026-2027-code-base.vercel.app
-> CI                   = false
-> ```
-> Then go to Deployments → Redeploy.
+> **✅ Render is live at:** `https://lexi-server-1rx9.onrender.com`
+> Remember to go to Vercel → Settings → Environment Variables and set `REACT_APP_API_URL` to this URL, then redeploy.
 
 ---
 
@@ -121,18 +114,24 @@ NODE_ENV           = production
 > **Important — CORS:** Once you have both URLs, update `Lexi/server/src/server.ts` to add the Vercel URL to the `corsOptions.origin` array, commit, and push. Render will auto-redeploy.
 
 ### 2.4 Deploy
-Click **Create Web Service**. Render will build and deploy (~3-5 min). Note your public URL — it looks like `https://lexi-server.onrender.com`.
+Click **Create Web Service**. Render will build and deploy (~3-5 min).
+
+> ✅ **Render server is live at:** `https://lexi-server-1rx9.onrender.com`
 
 ---
 
 ## Step 3 — Wire everything together
 
-### 3.1 Update Vercel env var
-Go to Vercel → your project → **Settings → Environment Variables**:
-- Set `REACT_APP_API_URL` to your Render URL (e.g. `https://lexi-server.onrender.com`)
-- Set `REACT_APP_FRONTEND_URL` to `https://master-thesis-2026-2027-code-base.vercel.app`
-- Set `CI` to `false`
-- Trigger a redeploy: **Deployments → Redeploy**
+### 3.1 Update Vercel env vars
+Go to Vercel → your project → **Settings → Environment Variables** and set:
+
+```
+REACT_APP_API_URL      = https://lexi-server-1rx9.onrender.com
+REACT_APP_FRONTEND_URL = https://master-thesis-2026-2027-code-base.vercel.app
+CI                     = false
+```
+
+Then trigger a redeploy: **Deployments → (latest deployment) → Redeploy**.
 
 ### 3.2 Update CORS in server.ts
 Open `Lexi/server/src/server.ts`. Add your Vercel URL to the CORS origins:
@@ -145,7 +144,7 @@ origin: [
 ],
 ```
 
-Commit and push — Railway will auto-redeploy.
+Commit and push — Render will auto-redeploy.
 
 ### 3.3 Test in browser
 Open `https://master-thesis-2026-2027-code-base.vercel.app/e/69e397f15daf7d1e1d399827` in your phone's browser.
@@ -188,7 +187,7 @@ The Python engine connects directly to MongoDB Atlas and Firebase — both alrea
 If you add Phase 5 (deep-link to conversation), the Python engine will need to call the Lexi server. At that point, update `logic-python/.env`:
 
 ```
-LEXI_SERVER_URL = https://lexi-server.onrender.com
+LEXI_SERVER_URL = https://lexi-server-1rx9.onrender.com
 ```
 
 ---
@@ -230,7 +229,7 @@ LEXI_SERVER_URL = https://lexi-server.onrender.com
 - Check build command is `npm run build`
 
 **App loads but login fails**
-- Check `JWT_SECRET_KEY` is set in Railway
-- Check MongoDB Atlas Network Access allows `0.0.0.0/0` (all IPs) — Railway IPs change
+- Check `JWT_SECRET_KEY` is set in Render
+- Check MongoDB Atlas Network Access allows `0.0.0.0/0` (all IPs) — Render IPs change
 
-> **MongoDB Atlas IP whitelist:** Go to Atlas → Network Access → Add IP Address → Allow access from anywhere (`0.0.0.0/0`). This is required because Railway servers have dynamic IPs.
+> **MongoDB Atlas IP whitelist:** Go to Atlas → Network Access → Add IP Address → Allow access from anywhere (`0.0.0.0/0`). This is required because Render servers have dynamic IPs.
