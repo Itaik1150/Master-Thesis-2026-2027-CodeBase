@@ -14,10 +14,11 @@ const baseURL = isAndroidEmulator()
     ? 'http://10.0.2.2:5000' // Android emulator
     : 'http://localhost:5000'; // Browser development
 
-console.log('🔧 Axios baseURL:', baseURL);
+const resolvedBaseURL = process.env.REACT_APP_API_URL || baseURL;
+console.log('🔧 Axios baseURL:', resolvedBaseURL);
 
 const axiosInstance = axios.create({
-    baseURL: process.env.REACT_APP_API_URL || baseURL,
+    baseURL: resolvedBaseURL,
     withCredentials: true,
 });
 
