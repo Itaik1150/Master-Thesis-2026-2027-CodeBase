@@ -1,6 +1,6 @@
 # Lexi — Proactive Experiment System: Full Project Plan
 
-> **Last updated:** April 28, 2026 (Phase 3 in progress — 3.1 done, 3.2–3.4 planned)  
+> **Last updated:** April 29, 2026 (Phase 3 in progress — 3.1–3.4a done; Phase 7 cloud deployment live)  
 > **Author:** Master Thesis 2026–2027 CodeBase
 
 ---
@@ -21,7 +21,7 @@
    - Phase 4 — Researcher Dashboard Enhancements
    - Phase 5 — FCM → Conversation Deep-Link (deferred — UX polish, not a blocker)
    - Phase 6 — Quality & Research
-   - Phase 7 — Cloud Deployment (when ready for the real experiment)
+   - Phase 7 — Cloud Deployment ✅ (done — Vercel + Render live, APK rebuild pending)
 9. [Key Files Quick Reference](#9-key-files-quick-reference)
 10. [Environment Variables Reference](#10-environment-variables-reference)
 11. [Development Setup](#11-development-setup)
@@ -328,7 +328,7 @@ Participant in chat screen
 | Message injected as `firstChatSentence` after FCM | ✅ Working |
 | Notification tap → correct conversation deep-link | ❌ Not implemented (Phase 3) |
 | Notification scheduling (automatic) | ❌ Not implemented (Phase 4) |
-| System deployed to cloud (real devices, production URLs) | ❌ Not implemented (Phase 7) |
+| System deployed to cloud (real devices, production URLs) | ✅ Live — Vercel + Render (APK rebuild pending) |
 | Conversation memory for LLM | ❌ Not implemented (Phase 4) |
 | Web search capability | ❌ Not implemented (Phase 4) |
 | APK generation from dashboard | ❌ Not implemented (Phase 5) |
@@ -1098,9 +1098,16 @@ Export these metrics from the admin dashboard's Data Panel.
 
 ---
 
-### Phase 7 — Cloud Deployment
+### Phase 7 — Cloud Deployment ✅
 
-> **This phase is only needed when you are ready for the real experiment with real participants.** Until then, the local pilot (Phase 2) is sufficient. Cloud deployment means the server runs 24/7 without your laptop, and the APK URLs point to permanent public addresses.
+> **Status: Live as of April 29, 2026.**
+> - React client: `https://master-thesis-2026-2027-code-base.vercel.app`
+> - Node.js server: `https://lexi-server-1rx9.onrender.com`
+> - MongoDB: MongoDB Atlas (unchanged)
+> - Python engine: still runs locally from your laptop
+> - APK: still using local URL — **rebuild with production URL is the remaining step**
+
+> See `DEPLOYMENT.md` for the full setup guide and troubleshooting.
 
 The goal of this phase is a fully functional, end-to-end proactive experiment running on real Android phones with real users — not an emulator.
 
