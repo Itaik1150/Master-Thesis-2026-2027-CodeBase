@@ -1,4 +1,5 @@
 import { setActiveUser } from '@DAL/redux/reducers/activeUserReducer';
+import axiosInstance from '@DAL/server-requests/AxiosInstance';
 import { login } from '@DAL/server-requests/users';
 import { Pages } from '@app/App';
 import { Box, Container, Grid, TextField } from '@mui/material';
@@ -30,11 +31,7 @@ const registerDeviceInYourServer = async (payload: {
     fcmToken: string;
     experimentId: string;
 }) => {
-    await fetch("http://localhost:5000/register-device", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-    });
+    await axiosInstance.post('/users/register-device', payload);
 };
 
 interface LoginFormProps {
