@@ -11,17 +11,10 @@ class MongoDbProvider {
     }
 
     private initializeConnection() {
+        const uri = `${process.env.MONGODB_URL}/${process.env.MONGODB_DB_NAME}`;
         console.log('Connecting to MongoDB...');
         mongoose
-            .connect(`${process.env.MONGODB_URL}/${process.env.MONGODB_DB_NAME}`, {
-                ssl: true,
-                auth: {
-                    username: process.env.MONGODB_USER,
-                    password: process.env.MONGODB_PASSWORD,
-                },
-                retryWrites: true,
-                w: 'majority',
-            })
+            .connect(uri)
             .then(() => {
                 console.log('Successfully connected to MongoDB');
             })
