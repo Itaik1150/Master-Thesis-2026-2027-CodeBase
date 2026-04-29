@@ -34,8 +34,8 @@ From `Lexi/server/.env` (or wherever the server reads its env):
 - `FRONTEND_URL` (will be your new Vercel URL — set after step 1)
 
 From `Lexi/client/.env` (or `.env.local`):
-- `REACT_APP_API_URL` (will be your new Railway URL — set after step 2)
-- `REACT_APP_FRONTEND_URL` (will be your new Vercel URL — set after step 1)
+- `REACT_APP_API_URL` = `https://lexi-server-1rx9.onrender.com`
+- `REACT_APP_FRONTEND_URL` = `https://master-thesis-2026-2027-code-base.vercel.app`
 
 ---
 
