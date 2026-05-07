@@ -55,16 +55,23 @@ Always consider how changes affect all components.
 
 Current Task:
 
-3.4b — LLM conversation extraction (Phase 3 — Proactive Logic Improvements)
+Phase 3.4 is fully complete. Awaiting user direction on the next phase.
 
-Goal: For each proactive user, fetch their recent conversation messages from MongoDB
-(via metadata_conversations → conversations), then call the LLM once to extract:
-- interests (list of topics the user cares about)
-- future_mentions (events/plans they mentioned)
-- conversation_insight (one sentence summarizing communication style + language)
+Phase 3 status:
+- 3.1 ✅ tie isProactive to experiment settings
+- 3.2 ✅ scheduling + time window
+- 3.3 ✅ candidate message pool
+- 3.4a ✅ basic memory (demographics + recent sent topics)
+- 3.4b ✅ LLM extraction (interests / future_mentions / insight / language)
+- 3.4c ✅ persist proactiveMemory to the user document in MongoDB
+- 3.4d ✅ memory-aware per-user message generation (personalize_message_for_user)
 
-Store these in a `proactiveMemory` dict to be merged with the basic memory from 3.4a.
-See PLAN.md section 3.4b for the full spec.
+Likely next options (ask the user):
+- Phase 4 — Researcher dashboard enhancements (proactive settings UI, APK download, etc.)
+- Phase 3 deferred B — Engagement tracking (per-user response-time learning)
+- Phase 5 — FCM → Conversation Deep-Link (UX polish)
+
+See PLAN.md sections 3.4 (full spec) and 4 / 5 / Phase B for what each next step entails.
 
 
 Project Context:

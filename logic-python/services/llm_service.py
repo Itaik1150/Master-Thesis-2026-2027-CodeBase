@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import json
+import random
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 import requests
@@ -215,6 +217,287 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
             print(f"❌ Error analyzing headline: {e}")
             return {"should_send": False, "message": "NONE"}
     
+    def extract_user_memory(
+        self,
+        user_messages: List[str],
+        language: str = "he",
+        today_iso: str = "",
+    ) -> Dict[str, Any]:
+        """
+        3.4b: Extract structured insights from a user's past conversation messages.
+        One LLM call. Returns:
+            {
+                "interests": List[str],
+                "future_mentions": List[Dict],   # [{"text": str, "when_iso": str|None}]
+                "conversation_insight": str
+            }
+        On any failure (network/JSON/parse), returns the same shape with empty values
+        so the caller can merge it safely.
+
+        `today_iso` is used so the LLM can resolve relative dates like "tomorrow",
+        "next week", "in 2 hours" into absolute ISO 8601 datetimes. If empty,
+        falls back to current local time.
+        """
+        empty = {"interests": [], "future_mentions": [], "conversation_insight": ""}
+        if not user_messages:
+            return empty
+
+        capped = user_messages[-60:]
+        joined = "\n".join(f"- {m}" for m in capped if m)
+
+        today_label = today_iso or datetime.now().isoformat(timespec="minutes")
+        insight_lang_label = "Hebrew" if language == "he" else "English"
+        system_prompt = (
+            "You analyze conversation history for a research assistant.\n"
+            f"Today is {today_label}. Use this to resolve relative dates like "
+            "'today', 'tomorrow', 'in 2 hours', 'next week', etc.\n\n"
+            "From the user's messages, extract:\n"
+            "- interests: short topical labels the user seems to care about (3-7 items max).\n"
+            "- future_mentions: list of objects, each with exactly these keys:\n"
+            '    {"text": "<concise English description, e.g. \'playing soccer\'>",\n'
+            '     "when_iso": "<ISO 8601 datetime like 2026-05-07T18:00:00, or null if no clear timing>"}\n'
+            "  Resolve all relative dates against today. Use null for when_iso ONLY if the\n"
+            "  user truly gave no usable timing. Always prefer a concrete ISO datetime when possible.\n"
+            f"- conversation_insight: ONE short sentence in {insight_lang_label} summarizing\n"
+            "  their communication style and personality.\n\n"
+            "Return ONLY valid JSON with exactly these keys: interests, future_mentions, conversation_insight.\n"
+            "If a field has no signal, return an empty list or empty string."
+        )
+        user_prompt = f"User messages (most recent last):\n{joined}"
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 250,
+            "response_format": {"type": "json_object"},
+        }
+
+        try:
+            response = requests.post(self.api_url, headers=headers, json=data, timeout=15)
+            response.raise_for_status()
+            result = response.json()
+            text = result["choices"][0]["message"]["content"].strip()
+            parsed = json.loads(text)
+
+            # Normalize future_mentions to the new {text, when_iso} shape.
+            # Tolerate legacy plain strings or malformed objects.
+            normalized_future: List[Dict[str, Any]] = []
+            for item in parsed.get("future_mentions", []) or []:
+                if isinstance(item, dict):
+                    text_val = (item.get("text") or "").strip()
+                    when_val = item.get("when_iso")
+                    if not text_val:
+                        continue
+                    normalized_future.append({
+                        "text": text_val,
+                        "when_iso": when_val if when_val else None,
+                    })
+                elif isinstance(item, str) and item.strip():
+                    normalized_future.append({"text": item.strip(), "when_iso": None})
+
+            return {
+                "interests": parsed.get("interests", []) or [],
+                "future_mentions": normalized_future,
+                "conversation_insight": parsed.get("conversation_insight", "") or "",
+            }
+        except json.JSONDecodeError as e:
+            print(f"⚠️  extract_user_memory: invalid JSON from LLM: {e}")
+            return empty
+        except requests.exceptions.RequestException as e:
+            print(f"❌ extract_user_memory: network error: {e}")
+            return empty
+        except Exception as e:
+            print(f"❌ extract_user_memory: unexpected error: {e}")
+            return empty
+
+    def _tag_future_mentions(self, future_mentions: List, now: datetime) -> List[str]:
+        """
+        Convert structured future_mentions into time-tagged strings the LLM can act on.
+        Tolerates both new shape ({text, when_iso}) and legacy plain strings.
+        Drops events older than 7 days so we don't reference stale plans.
+        """
+        SECONDS_IN_DAY = 86400
+        UPCOMING_HORIZON = 30 * SECONDS_IN_DAY    # within 30 days → UPCOMING
+        PAST_HORIZON = 7 * SECONDS_IN_DAY          # within 7 days → PAST_RECENT, else drop
+
+        def humanize(seconds: float) -> str:
+            seconds = abs(seconds)
+            if seconds < 3600:
+                return f"~{max(int(seconds // 60), 1)} minutes"
+            if seconds < SECONDS_IN_DAY:
+                return f"~{int(seconds // 3600)} hours"
+            if seconds < 30 * SECONDS_IN_DAY:
+                return f"~{int(seconds // SECONDS_IN_DAY)} days"
+            return f"~{int(seconds // (7 * SECONDS_IN_DAY))} weeks"
+
+        tags: List[str] = []
+        for item in future_mentions or []:
+            # Backwards-compat: legacy plain string
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    tags.append(f'"{text}" (UNKNOWN timing)')
+                continue
+            if not isinstance(item, dict):
+                continue
+            text = (item.get("text") or "").strip()
+            if not text:
+                continue
+            when_iso = item.get("when_iso")
+            if not when_iso:
+                tags.append(f'"{text}" (UNKNOWN timing)')
+                continue
+            try:
+                when = datetime.fromisoformat(str(when_iso).replace("Z", "+00:00"))
+                # Drop tz to compare with naive `now`
+                if when.tzinfo is not None:
+                    when = when.replace(tzinfo=None)
+            except (ValueError, TypeError):
+                tags.append(f'"{text}" (UNKNOWN timing)')
+                continue
+
+            delta_seconds = (when - now).total_seconds()
+            if delta_seconds > 0:
+                if delta_seconds <= UPCOMING_HORIZON:
+                    tags.append(f'"{text}" (UPCOMING in {humanize(delta_seconds)})')
+                else:
+                    tags.append(f'"{text}" (FAR-FUTURE in {humanize(delta_seconds)})')
+            else:
+                if -delta_seconds <= PAST_HORIZON:
+                    tags.append(f'"{text}" (PAST {humanize(delta_seconds)} ago)')
+                # else: silently drop — too old to reference
+
+        return tags
+
+    def personalize_message_for_user(self, candidate_message: str, memory: Dict) -> str:
+        """
+        3.4d: Rewrite a candidate conversation starter to feel personal for this user.
+
+        Uses (when available):
+          - demographics.name (subtle — never spammy)
+          - interests, future_mentions (with time tags), conversation_insight
+          - preferred_language ("he" or "en")
+
+        Returns the personalized sentence. On any LLM failure, returns the original
+        candidate_message so the cycle never breaks.
+        """
+        if not candidate_message:
+            return ""
+
+        demo = memory.get("demographics", {}) or {}
+        name = demo.get("name", "") or ""
+        interests = memory.get("interests", []) or []
+        future_mentions = memory.get("future_mentions", []) or []
+        insight = memory.get("conversation_insight", "") or ""
+        language = memory.get("preferred_language", "he")
+        target_lang = "Hebrew" if language == "he" else "English"
+
+        future_tags = self._tag_future_mentions(future_mentions, datetime.now())
+
+        # Pick a primary focus for THIS message via weighted random.
+        # Goal: variety across cycles instead of always favoring the same signal.
+        # Future mentions still slightly preferred when they exist, but interests
+        # and the seed (news/topic) get real share of voice.
+        options: List[str] = []
+        weights: List[float] = []
+        if future_tags:
+            options.append("future")
+            weights.append(2.0)
+        if interests:
+            options.append("interest")
+            weights.append(1.5)
+        options.append("seed")
+        weights.append(1.0)
+        primary_focus = random.choices(options, weights=weights, k=1)[0]
+        self._last_personalization_focus = primary_focus  # exposed for logging
+
+        focus_instructions = {
+            "future": (
+                "Pick exactly ONE future mention and react per its time tag:\n"
+                "   - UPCOMING (within 30 days): ask warmly if they're ready, excited, when it is.\n"
+                "   - PAST (within last 7 days): ask how it went or what it was like.\n"
+                "   - FAR-FUTURE: mention it casually as something to look forward to.\n"
+                "   - UNKNOWN timing: ask gently about their plans for it."
+            ),
+            "interest": (
+                "Pick ONE of the listed interests and ask a fresh open question about it.\n"
+                "   You may casually nod to a future mention if it fits, but don't make it the focus."
+            ),
+            "seed": (
+                "Take the seed message as inspiration. Rewrite it in the user's voice/style.\n"
+                "   Stay close to the seed's topic — don't substitute future mentions or interests for it."
+            ),
+        }
+
+        system_prompt = (
+            f"You write a short personal conversation starter in {target_lang} for a research assistant.\n\n"
+            f"PRIMARY FOCUS for this message: {primary_focus.upper()}\n"
+            f"{focus_instructions[primary_focus]}\n\n"
+            "HARD RULES (always apply):\n"
+            f"- Output MUST be in {target_lang}.\n"
+            "- Maximum 15 words.\n"
+            "- Friendly and open-ended (must invite a reply).\n"
+            "- Match the user's communication style described in the insight.\n"
+            "- You MAY use the user's name once if it feels natural; otherwise don't.\n"
+            "- NEVER ask about a PAST event as if it were upcoming, or vice versa.\n"
+            "- Do NOT mention age or gender.\n"
+            "- Do NOT add quotes, labels, prefixes, or explanations.\n"
+            "- Return ONLY the final sentence."
+        )
+
+        future_block = (
+            "\n".join(f"  - {t}" for t in future_tags) if future_tags else "  (none)"
+        )
+        user_payload = (
+            "FUTURE MENTIONS:\n"
+            f"{future_block}\n"
+            f"INTERESTS: {', '.join(interests) if interests else 'none'}\n"
+            f"COMMUNICATION STYLE INSIGHT: {insight or 'unknown'}\n"
+            f"USER NAME: {name or 'unknown'}\n"
+            f"SEED MESSAGE: {candidate_message}\n"
+            f"PRIMARY FOCUS for this message: {primary_focus}"
+        )
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_payload},
+            ],
+            "temperature": 0.7,
+            "max_tokens": 80,
+        }
+
+        try:
+            response = requests.post(self.api_url, headers=headers, json=data, timeout=15)
+            response.raise_for_status()
+            result = response.json()
+            text = result["choices"][0]["message"]["content"].strip()
+            # Strip wrapping quotes the model sometimes adds
+            if (text.startswith('"') and text.endswith('"')) or (
+                text.startswith("'") and text.endswith("'")
+            ):
+                text = text[1:-1].strip()
+            return text or candidate_message
+        except requests.exceptions.RequestException as e:
+            print(f"❌ personalize_message_for_user: network error: {e}")
+            return candidate_message
+        except Exception as e:
+            print(f"❌ personalize_message_for_user: unexpected error: {e}")
+            return candidate_message
+
     def generate_topic_message(self, topic: str) -> str:
         """
         Generate a Hebrew conversation starter from a topic (no headline needed).
