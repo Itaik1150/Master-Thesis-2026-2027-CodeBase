@@ -1,6 +1,6 @@
 # Lexi — Proactive Experiment System: Full Project Plan
 
-> **Last updated:** April 29, 2026 (Phase 3 in progress — 3.1–3.4a done, 3.4b next; Phase 7 cloud deployment ✅ fully live)  
+> **Last updated:** May 7, 2026 (Phase 3.4 fully done — basic memory + LLM extraction + persistence + memory-aware personalization all live; engagement tracking is the next deferred phase)  
 > **Author:** Master Thesis 2026–2027 CodeBase
 
 ---
@@ -635,7 +635,7 @@ origin: [
 
 ### Phase 3 (Current) — Proactive Logic Improvements
 
-> **This is the current focus.** Priority order: 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4a ✅ → 3.4b (LLM conversation extraction) → 3.4c (memory-aware message generation) → 3.4d (engagement tracking).
+> **This is the current focus.** Priority order: 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4a ✅ → 3.4b ✅ → 3.4c ✅ → 3.4d ✅ → engagement tracking (Phase B).
 
 ---
 
@@ -834,8 +834,11 @@ def build_basic_memory(self, user: Dict) -> Dict:
 
 Sources: `metadata_conversations` to find recent conversation IDs for this user → `conversations` to fetch actual messages → one LLM call to extract structured insights.
 
+> **LLM model used:** `gpt-3.5-turbo` (same as `analyze_headline` / `generate_topic_message` in `llm_service.py`).
+> To change it, edit the `model` field in `ProactiveLogic.extract_user_memory()` — we deliberately keep this hardcoded next to the other two model calls so all three stay consistent.
+
 ```python
-MEMORY_CONVERSATIONS_LIMIT = 3   # how many past conversations to read
+MEMORY_CONVERSATIONS_LIMIT = 10  # how many past conversations to read per user
 
 def extract_conversation_memory(self, user_id: str) -> Dict:
     """
@@ -892,9 +895,15 @@ def save_user_memory(self, user_id: str, memory: Dict):
     )
 ```
 
-**3.4d — Use memory in per-user message generation**
+**3.4d — Use memory in per-user message generation** ✅ **Done (May 7, 2026)**
 
-Replace the current `select_message_for_user()` (which returns `candidates[0]`) with a memory-aware generator:
+Replaces the simple `select_message_for_user()` with a two-step pipeline:
+1. Use the existing deterministic selector to pick a topic-appropriate candidate (avoiding repeats).
+2. If the user has any rich signal (`interests`, `future_mentions`, or `conversation_insight`), call a new LLM method `personalize_message_for_user(candidate_message, memory)` that rewrites the message text in the user's `preferred_language`, optionally referencing their future mentions and matching their style.
+
+Implemented as `ResearchService.select_personalized_message()` and `ProactiveLogic.personalize_message_for_user()`. Falls back to the original candidate text on any LLM failure or when memory is empty. Logs `✨personalized` vs `default` per user, and prints the original seed message alongside the personalized output for auditing.
+
+**Original spec (kept for reference):**
 
 1. Read `user.proactiveMemory` (just set in 3.4c).
 2. Filter candidate pool: exclude candidates whose `topic_label` is in `topics_sent_recently`.

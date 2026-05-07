@@ -8,9 +8,11 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from bson import ObjectId
 
-MAX_DAILY_NOTIFICATIONS = 3  # hard cap per user per day; raised later via dashboard
-MAX_CANDIDATES = 6           # max pool size per cycle (news + topic fill)
-MEMORY_TOPICS_LIMIT = 5     # how many recent sent topics to remember per user
+MAX_DAILY_NOTIFICATIONS = 9999     # TEMP for testing 3.4d — revert to 3 before pilot
+MAX_CANDIDATES = 6                 # max pool size per cycle (news + topic fill)
+MEMORY_TOPICS_LIMIT = 5            # how many recent sent topics to remember per user (for memory display)
+BLOCK_LAST_N_TOPICS = 1            # don't repeat this many most-recent topics back-to-back
+MEMORY_CONVERSATIONS_LIMIT = 10    # how many past conversations to read per user (3.4b)
 
 from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
@@ -495,33 +497,152 @@ class ResearchService:
             "topics_sent_recently": topics_sent,
         }
 
+    def extract_conversation_memory(self, user_id: str) -> Dict:
+        """
+        3.4b: Read this user's last N conversations and run ONE LLM call to extract
+        interests / future_mentions / conversation_insight.
+        Also detects preferred_language from the message text (Hebrew vs Latin).
+
+        Caller must hold an open MongoDB connection.
+        On any failure (no conversations, query error, LLM error) returns the same
+        shape with empty values so it can be merged safely with basic memory.
+        """
+        empty = {
+            "interests": [],
+            "future_mentions": [],
+            "conversation_insight": "",
+            "preferred_language": "he",
+        }
+
+        try:
+            recent_meta = list(mongodb_client.db["metadata_conversations"].find(
+                {"userId": user_id},
+                sort=[("createdAt", -1)],
+                limit=MEMORY_CONVERSATIONS_LIMIT,
+            ))
+        except Exception as e:
+            print(f"⚠️  metadata_conversations query failed for {user_id}: {e}")
+            return empty
+
+        if not recent_meta:
+            return empty
+
+        all_user_messages: List[str] = []
+        for meta in recent_meta:
+            conv_id = str(meta["_id"])
+            try:
+                messages = list(mongodb_client.db["conversations"].find(
+                    {"conversationId": conv_id, "role": "user"}
+                ))
+            except Exception as e:
+                print(f"⚠️  conversations query failed for {conv_id}: {e}")
+                continue
+            all_user_messages.extend([
+                m.get("content", "") for m in messages if m.get("content")
+            ])
+
+        if not all_user_messages:
+            return empty
+
+        # Detect language by Hebrew character ratio over the combined text
+        combined = " ".join(all_user_messages)
+        hebrew_chars = sum(1 for c in combined if '\u05d0' <= c <= '\u05ea')
+        preferred_language = "he" if hebrew_chars > len(combined) * 0.1 else "en"
+
+        extracted = self.llm_service.extract_user_memory(
+            all_user_messages,
+            preferred_language,
+            today_iso=datetime.now().isoformat(timespec="minutes"),
+        )
+        extracted["preferred_language"] = preferred_language
+        return extracted
+
+    def save_user_memory(self, user_id: str, memory: Dict) -> bool:
+        """
+        3.4c: Persist the merged proactive memory on the user document so it can be
+        inspected in MongoDB Atlas and reused across cycles.
+
+        Caller must hold an open MongoDB connection.
+        """
+        try:
+            memory_with_ts = {**memory, "last_updated": datetime.now(timezone.utc)}
+            result = mongodb_client.db[mongodb_client.users_collection].update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {"proactiveMemory": memory_with_ts}},
+            )
+            return result.matched_count > 0
+        except Exception as e:
+            print(f"⚠️  Failed to save proactive memory for {user_id}: {e}")
+            return False
+
     def select_message_for_user(self, candidates: List[Dict], memory: Dict) -> Optional[Dict]:
         """
         Pick the best candidate for a specific user using their basic memory.
-        Prefers candidates whose topic_label was not recently sent to this user.
-        Falls back to candidates[0] if all topics were already used.
+        Blocks ONLY the last BLOCK_LAST_N_TOPICS topics from being repeated back-to-back.
+        Older topics may resurface — variety is good as long as it's not consecutive.
+        Falls back to candidates[0] if every available topic is currently blocked.
         """
         if not candidates:
             return None
 
-        recently_sent = set(memory.get("topics_sent_recently", []))
+        recent_list = memory.get("topics_sent_recently", []) or []
+        # `topics_sent_recently` is sorted most-recent-first, so the head is the freshest.
+        blocked = set(recent_list[:BLOCK_LAST_N_TOPICS])
 
-        # Prefer candidates on topics not recently sent
-        unused = [c for c in candidates if c["topic_label"] not in recently_sent]
+        unused = [c for c in candidates if c["topic_label"] not in blocked]
 
         if unused:
-            # Among unused, prefer news over topic for variety
             news = [c for c in unused if c["source"] == "news"]
             chosen = news[0] if news else unused[0]
         else:
-            # All topics exhausted — pick candidates[0] as safe fallback
-            print(f"⚠️  All candidate topics were recently sent, using fallback")
+            print(f"⚠️  All candidate topics are currently blocked, using fallback")
             chosen = candidates[0]
 
         print(f"🎯 Selected [{chosen['source']}:{chosen['topic_label']}] "
-              f"(excluded: {recently_sent or 'none'})")
+              f"(blocked-last: {blocked or 'none'})")
         return chosen
-    
+
+    def select_personalized_message(self, candidates: List[Dict], memory: Dict) -> Optional[Dict]:
+        """
+        3.4d: Pick a candidate (using basic memory to avoid repeats), then rewrite
+        its message text via the LLM using the user's rich memory.
+
+        Falls back to the deterministic select_message_for_user when:
+          - memory has no rich signal (no interests / future_mentions / insight), or
+          - the LLM personalization call fails.
+
+        Always returns the same candidate dict shape, with `generated_message`
+        possibly replaced by the personalized version. The original is preserved
+        in `original_message` and a `personalized` boolean is added for logging.
+        """
+        chosen = self.select_message_for_user(candidates, memory)
+        if not chosen:
+            return None
+
+        has_rich_signal = (
+            bool(memory.get("interests")) or
+            bool(memory.get("future_mentions")) or
+            bool(memory.get("conversation_insight"))
+        )
+        if not has_rich_signal:
+            return chosen
+
+        personalized_text = self.llm_service.personalize_message_for_user(
+            candidate_message=chosen.get("generated_message", ""),
+            memory=memory,
+        )
+        if not personalized_text or not personalized_text.strip():
+            return chosen
+
+        # Return a shallow copy so we don't mutate the shared candidate pool
+        result = dict(chosen)
+        result["original_message"] = chosen.get("generated_message", "")
+        result["generated_message"] = personalized_text.strip()
+        result["personalized"] = result["generated_message"] != result["original_message"]
+        # Surface which signal the LLM was told to focus on (for monitoring variety).
+        result["focus"] = getattr(self.llm_service, "_last_personalization_focus", None)
+        return result
+
     def get_proactive_users_with_rate_limit(self, cycle_id: str) -> List[Dict]:
         """Get proactive users, skipping those who already hit their daily notification cap."""
         users = self.get_all_proactive_users()
@@ -607,25 +728,42 @@ class ResearchService:
             username = user.get('username', 'Unknown')
             fcm_token = user["fcmToken"]
 
-            # Build basic memory (3.4a): demographics + recent sent topics
-            # Needs a fresh connection since previous steps may have closed it.
+            # Build memory:
+            #   3.4a — demographics + recent sent topics (no LLM)
+            #   3.4b — interests / future_mentions / insight / language (one LLM call)
+            #   3.4c — persist merged memory to the user document
+            # All MongoDB work happens inside one connect/disconnect block.
             memory = {}
             try:
                 if mongodb_client.connect():
-                    memory = self.build_basic_memory(user)
-                    print(f"🧠 Memory for {username}: sent={memory.get('topics_sent_recently', [])}")
+                    basic = self.build_basic_memory(user)
+                    extracted = self.extract_conversation_memory(user_id)
+                    memory = {**basic, **extracted}
+                    self.save_user_memory(user_id, memory)
+                    print(
+                        f"🧠 Memory for {username}: "
+                        f"sent={memory.get('topics_sent_recently', [])}, "
+                        f"interests={memory.get('interests', [])}, "
+                        f"lang={memory.get('preferred_language', 'he')}"
+                    )
             except Exception as e:
                 print(f"⚠️  Could not build memory for {username}: {e}")
             finally:
                 mongodb_client.disconnect()
 
-            # Pick the best candidate for this user based on their memory
-            message = self.select_message_for_user(candidates, memory)
+            # 3.4d: pick + personalize. Falls back gracefully when memory is empty
+            # or the LLM call fails (returns the deterministic candidate unchanged).
+            message = self.select_personalized_message(candidates, memory)
             if not message:
                 print(f"⚠️  No candidate available for {username}, skipping")
                 continue
 
-            print(f"\n👤 {username} → [{message['source']}:{message['topic_label']}] {message['generated_message']}")
+            tag = "✨personalized" if message.get("personalized") else "default"
+            focus = message.get("focus")
+            focus_str = f" focus={focus}" if focus else ""
+            print(f"\n👤 {username} → [{message['source']}:{message['topic_label']}] ({tag}{focus_str}) {message['generated_message']}")
+            if message.get("personalized"):
+                print(f"   ↪ original was: {message.get('original_message', '')}")
 
             try:
                 # Step 1: Send FCM notification
@@ -637,7 +775,7 @@ class ResearchService:
                         fcm_token=fcm_token
                     ),
                     body=message["generated_message"],
-                    title="נושא שיחה חדש"
+                    title="Lexi"
                 )
 
                 if notification_result:
