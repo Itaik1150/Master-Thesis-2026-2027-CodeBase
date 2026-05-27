@@ -1,6 +1,6 @@
 # Lexi — Proactive Experiment System: Full Project Plan
 
-> **Last updated:** May 7, 2026 (Phase 3.4 fully done — basic memory + LLM extraction + persistence + memory-aware personalization all live; engagement tracking is the next deferred phase)  
+> **Last updated:** May 26, 2026 (Phase 3 complete — memory pipeline + personalization live. Entering the **June sprint** for Phase 4 — heuristics engine, LLM upgrade, intense Android notifications, and dashboard polish.)  
 > **Author:** Master Thesis 2026–2027 CodeBase
 
 ---
@@ -12,16 +12,17 @@
 3. [Component Breakdown](#3-component-breakdown)
 4. [Data Flow](#4-data-flow)
 5. [Database Schema](#5-database-schema)
-6. [Current Working State](#6-current-working-state-as-of-april-2026)
+6. [Current Working State](#6-current-working-state-as-of-may-26-2026)
 7. [Known Bugs & Gaps](#7-known-bugs--gaps)
 8. [Implementation Roadmap](#8-implementation-roadmap)
    - Phase 1 — Core Bug Fixes ✅
    - Phase 2 — Real-Phone Pilot Testing ✅
-   - Phase 3 — Proactive Logic Improvements ← **current**
-   - Phase 4 — Researcher Dashboard Enhancements
-   - Phase 5 — FCM → Conversation Deep-Link (deferred — UX polish, not a blocker)
-   - Phase 6 — Quality & Research
-   - Phase 7 — Cloud Deployment ✅ (fully done — Vercel + Render live, APK rebuilt with production URL)
+   - Phase 3 — Proactive Logic Improvements ✅
+   - Phase 4 — **Heuristics Engine & Final UX (June Sprint)** ← **current**
+   - Phase 5 — Researcher Dashboard Enhancements
+   - Phase 6 — FCM → Conversation Deep-Link (deferred — UX polish, not a blocker)
+   - Phase 7 — Quality & Research
+   - Phase 8 — Cloud Deployment ✅ (Vercel + Render live, APK rebuilt with production URL)
 9. [Key Files Quick Reference](#9-key-files-quick-reference)
 10. [Environment Variables Reference](#10-environment-variables-reference)
 11. [Development Setup](#11-development-setup)
@@ -33,7 +34,7 @@
 ### Research Goal
 
 The Lexi project is a **Master Thesis research platform** designed to study how proactive AI-initiated conversations affect user engagement. Traditional conversational AI systems are reactive — they wait for users to initiate. Lexi adds a proactive layer: the system decides *when* and *what* to say to a participant, sends a push notification, and invites them into a conversation.
-
+    
 ### Two Stakeholders
 
 | Stakeholder | Role |
@@ -53,7 +54,7 @@ The Lexi project is a **Master Thesis research platform** designed to study how 
 ```
 Android App  ←→  Lexi Web Platform  ←→  Python Proactive Engine
      ↕                  ↕                        ↕
-  Firebase FCM      MongoDB Atlas            OpenAI / Groq
+  Firebase FCM      MongoDB Atlas         GPT-4o / Claude 3.5 Sonnet
 ```
 
 ---
@@ -73,10 +74,10 @@ flowchart TD
   Android -->|"FCM token via JS bridge"| LexiWeb
   LexiWeb -->|"POST /users/fcm-token"| NodeServer
 
-  Python["Python Engine\nlogic-python/"] -->|"reads proactive users + FCM tokens"| MongoDB
-  Python -->|"fetches headlines"| NewsAPI["News API\n(Israeli news)"]
-  Python -->|"generates Hebrew message"| LLM["OpenAI GPT-3.5-turbo\n/ Groq Llama-3.3-70b"]
-  Python -->|"sends push notification"| FCM["Firebase Cloud Messaging"]
+  Python["Python Engine\nlogic-python/"] -->|"reads proactive users + memory"| MongoDB
+  Python -->|"evaluates 3 heuristics\n(Temporal / Affective / Gap)"| Heuristics["Heuristics Engine\n(Phase 4)"]
+  Python -->|"generates personalized Hebrew message"| LLM["GPT-4o\n/ Claude 3.5 Sonnet"]
+  Python -->|"sends high-intensity push"| FCM["Firebase Cloud Messaging"]
   FCM -->|"push notification"| Android
   Android -->|"user taps notification"| LexiWeb
   Python -->|"injects firstChatSentence"| MongoDB
@@ -170,28 +171,37 @@ The Python engine runs independently of the web platform and is responsible for 
 | File | Responsibility |
 |------|---------------|
 | `main.py` | Demo orchestrator; wires all services together for manual testing |
-| `services/research_service.py` | Main proactive cycle: news → LLM → FCM → DB injection → logging |
-| `services/llm_service.py` | Two LLM clients: `ProactiveLogic` (OpenAI GPT-3.5-turbo, generates Hebrew conversation-starters from headlines) and `LLMService` (Groq llama-3.3-70b, generates push notification text) |
-| `services/news_service.py` | Fetches Israeli news headlines; caches for 30 minutes |
+| `services/research_service.py` | Main proactive cycle: heuristic evaluation → memory-aware LLM personalization → FCM → DB injection → logging |
+| `services/llm_service.py` | Memory + personalization clients. **Phase 4:** upgrading to `gpt-4o` / `claude-3-5-sonnet`, model selectable via `LLM_PROVIDER` + `LLM_MODEL` env vars |
+| ~~`services/news_service.py`~~ | ⚠️ **Deprecated (Phase 4) — being removed.** Headlines are no longer a trigger; nudges now come from the three research heuristics |
 | `services/fcm_service.py` | Firebase Admin SDK; `send_to_token` and `send_to_user` methods |
+| `heuristics/temporal.py` *(Phase 4)* | Temporal heuristic — schedules nudges from `future_mentions` + fixed-time fallbacks |
+| `heuristics/affective.py` *(Phase 4)* | Affective heuristic — sentiment/emotion inference, queues follow-ups when intensity is high |
+| `heuristics/behavioural_gap.py` *(Phase 4)* | Behavioural-gap heuristic — tracks stated intents and checks back after 24–48h |
 | `core/data_loader.py` | Loads user context from MongoDB |
 | `core/models.py` | `UserContext` and `DecisionResult` dataclasses |
 | `logic/decision_engine.py` | Scoring logic: determines whether to send or wait based on user activity |
 | `utils/mongodb_client.py` | PyMongo client; `get_users_with_fcm_tokens`, `connect`, `disconnect` |
-| `requirements.txt` | **Incomplete** — see Bug #7 |
+| `scheduler.py` | APScheduler daemon — runs the proactive cycle on cron + per-hour heuristic checks |
+| `requirements.txt` | Pinned dependencies — Phase 4 adds `anthropic` if Claude is selected |
 
-**Proactive Cycle (`run_full_proactive_cycle`):**
+**Proactive Cycle (`run_full_proactive_cycle`) — Phase 4 design:**
 
 ```
-1. Fetch fresh Israeli news headlines (cache 30 min)
-2. For each headline → LLM decides if suitable for conversation (Hebrew, positive, relatable)
-3. Select single best approved message for this cycle
-4. Query MongoDB for proactive users with valid FCM tokens
-5. Apply rate-limit: skip users already messaged in this cycle_id
-6. For each eligible user:
-   a. Send FCM push notification
-   b. If FCM succeeds → inject message into user's agent.firstChatSentence in MongoDB
-   c. Log event to proactive_logs collection
+1. Load proactive users + their proactiveMemory from MongoDB
+2. For each user, evaluate the three heuristics (gated per experiment):
+   a. Temporal       → any future_mention within its lead-time window?
+   b. Affective      → any pending_affective_followup whose schedule has arrived?
+   c. Behavioural Gap → any open_intent older than 24h with no completion signal?
+3. If a heuristic fires, generate a memory-aware personalized message
+   (GPT-4o / Claude 3.5 Sonnet) using the existing personalize_message_for_user
+4. Apply rate-limit (skip users already messaged in this cycle_id; daily cap)
+5. For each eligible user:
+   a. Send high-intensity FCM push notification
+   b. If FCM succeeds → inject message into user's agent.firstChatSentence
+   c. Log event to proactive_logs with trigger_source ∈ {temporal|affective|gap|topic}
+6. If no heuristic fired, optionally fall back to a topic-based check-in
+   (kept as last resort only)
 ```
 
 ---
@@ -213,22 +223,30 @@ Participant opens APK
     → React calls POST /users/fcm-token (BUG: missing userId — see Bug #1)
 ```
 
-### Proactive Notification Flow
+### Proactive Notification Flow (Phase 4 — heuristic-driven)
 
 ```
-Python engine runs run_full_proactive_cycle()
-    → Fetch headlines from news API
-    → LLM filters and generates Hebrew conversation-starter
+Scheduler triggers run_full_proactive_cycle()
     → Query MongoDB: users where isProactive=true AND fcmToken exists
-    → For each eligible user:
-        → Firebase sends push notification to FCM token
+    → For each user, load proactiveMemory (interests, future_mentions,
+       open_intents, pending_affective_followup, conversation_insight)
+    → Evaluate the three heuristics (gated by per-experiment toggle):
+        • Temporal      — future_mention within its lead-time window
+        • Affective     — emotional check-in scheduled from prior conversation
+        • Behavioural   — stated intent unresolved after 24–48h
+    → If a heuristic fires:
+        → Generate a personalized Hebrew message via GPT-4o / Claude 3.5 Sonnet
+        → Apply rate-limit (per-cycle dedupe + daily cap)
+        → Firebase sends high-intensity push (IMPORTANCE_HIGH + full-screen intent)
         → MongoDB updated: user.agent.firstChatSentence = generated message
-        → Event logged to proactive_logs
-    → Participant device receives push notification
+        → Event logged to proactive_logs with trigger_source + heuristic metadata
+    → Participant device receives unmissable push notification
     → Participant taps notification → MainActivity opens
     → WebView loads experiment URL
     → React reads firstChatSentence → shown as opening message in chat
 ```
+
+> Note: news-headline ingestion has been removed in Phase 4. `news_service.py` is deprecated and the cycle no longer depends on any external news source.
 
 ### Conversation Flow
 
@@ -308,30 +326,51 @@ Participant in chat screen
 
 ---
 
-## 6. Current Working State (as of April 27, 2026)
+## 6. Current Working State (as of May 26, 2026)
+
+> **Phase 3 is complete.** The memory pipeline, per-user personalization, scheduler daemon, and cloud deployment are all live. We are now entering the **June sprint (Phase 4)** — pivoting away from news triggers, upgrading the LLM, implementing the three core research heuristics (Temporal / Affective / Behavioural Gap), intensifying Android notifications, and finishing the researcher-facing dashboard.
+
+### What is live today
 
 | Feature | Status |
 |---------|--------|
 | FCM end-to-end delivery (token → MongoDB → Python → device) | ✅ Working |
-| Proactive experiment toggle in admin dashboard | ✅ Working |
-| `isProactive` flag assignment on first FCM token receipt | ✅ Working |
-| Android WebView renders experiment on emulator | ✅ Working |
-| Android WebView renders experiment on **real phone** (WiFi) | ✅ Working |
-| Experiment URL configurable via `BuildConfig` (no code edit needed) | ✅ Working |
+| Android WebView on emulator **and** real phone | ✅ Working |
+| Experiment URL configurable via `BuildConfig` | ✅ Working |
 | FCM token sync from WebView after login | ✅ Working |
-| `fcmTokenUpdatedAt` saved to MongoDB on token update | ✅ Working |
-| News fetch → LLM filter → FCM send pipeline | ✅ Working (manual run) |
-| Real news from NewsAPI (live headlines, not mock) | ✅ Working |
-| LLM content filter (rejects war/sensitive topics) | ✅ Working |
-| Topic-based fallback message when all news rejected | ✅ Working |
-| `proactive_logs` collection logs each cycle | ✅ Working |
+| `fcmTokenUpdatedAt` saved to MongoDB | ✅ Working |
+| `isProactive` tied to `experiment.proactiveSettings.enabled` | ✅ Working (Phase 3.1) |
+| Scheduler daemon (`scheduler.py`) — cron + daily window + per-user cap | ✅ Working (Phase 3.2) |
+| Candidate message pool (4–6 candidates per cycle) | ✅ Working (Phase 3.3) |
+| `proactiveMemory` extraction (demographics + interests + future mentions + language + insight) | ✅ Working (Phase 3.4a–c) |
+| Memory-aware per-user message personalization (LLM) | ✅ Working (Phase 3.4d) |
+| `proactive_logs` audit trail for every cycle | ✅ Working |
 | Message injected as `firstChatSentence` after FCM | ✅ Working |
-| Notification tap → correct conversation deep-link | ❌ Not implemented (Phase 3) |
-| Notification scheduling (automatic) | ❌ Not implemented (Phase 4) |
-| System deployed to cloud (real devices, production URLs) | ✅ Fully live — Vercel + Render + APK with production URL |
-| Conversation memory for LLM | ❌ Not implemented (Phase 4) |
-| Web search capability | ❌ Not implemented (Phase 4) |
-| APK generation from dashboard | ❌ Not implemented (Phase 5) |
+| Cloud deployment — Vercel + Render + Atlas + signed APK | ✅ Live (Phase 8) |
+
+### What changes in the June sprint (Phase 4)
+
+| Feature | Status |
+|---------|--------|
+| `news_service.py` headline pipeline | ⚠️ **Being removed** — news triggers are deprecated |
+| GPT-3.5-turbo + Groq Llama-3.3 stack | ⚠️ **Upgrading to GPT-4o / Claude 3.5 Sonnet** for stronger Hebrew + emotional inference |
+| Temporal heuristic — schedule from `future_mentions` + fixed check-ins | ⏳ Planned (Phase 4.3) |
+| Affective heuristic — emotion-aware proactive check-ins | ⏳ Planned (Phase 4.4) |
+| Behavioural-gap heuristic — intent vs. reporting (24–48h follow-up) | ⏳ Planned (Phase 4.5) |
+| High-intensity Android notifications (`IMPORTANCE_HIGH` + `setFullScreenIntent`, no silent grouping) | ⏳ Planned (Phase 4.6) |
+| Dashboard heuristic toggles per experiment + LLM model selector | ⏳ Planned (Phase 4.7) |
+| System prompt: replace "Cambridge" → "Ben-Gurion University (BGU)" | ⏳ Planned (Phase 4.7) |
+| APK generation button in dashboard (promoted from the old Dashboard phase) | ⏳ Planned (Phase 4.8) |
+
+### Still deferred to later phases
+
+| Feature | Status |
+|---------|--------|
+| Notification tap → correct conversation deep-link | ❌ Deferred to Phase 6 |
+| Web search capability for agents | ❌ Deferred to Phase 7 |
+| Google Calendar OAuth for Temporal heuristic | 💡 Nice-to-have (Phase 4.9 stretch) |
+| Logo refresh (app icon + dashboard header) | 💡 Nice-to-have (Phase 4.9 stretch) |
+| Auto-generated system documentation | 💡 Nice-to-have (Phase 4.9 stretch) |
 
 ---
 
@@ -448,7 +487,7 @@ private fun AppRoot() {
 }
 ```
 
-This allows each APK build to embed a different experiment URL. The researcher dashboard (Phase 4) will trigger builds with the correct URL automatically.
+This allows each APK build to embed a different experiment URL. The researcher dashboard (Phase 4.8) will trigger builds with the correct URL automatically.
 
 ---
 
@@ -501,7 +540,7 @@ fcmTokenUpdatedAt: { type: Date },
 
 The goal of this phase is to test the full system end-to-end on **a real Android phone** (not the emulator), while the server still runs on your local computer. This is a personal pilot — a few days of self-testing before the real experiment — and does **not** require cloud deployment.
 
-Cloud deployment (Phase 7) is only needed when you want the experiment to run for real participants 24/7 without your laptop being on.
+Cloud deployment (Phase 8) is only needed when you want the experiment to run for real participants 24/7 without your laptop being on.
 
 ---
 
@@ -633,9 +672,11 @@ origin: [
 
 ---
 
-### Phase 3 (Current) — Proactive Logic Improvements
+### Phase 3 — Proactive Logic Improvements ✅ **Done (May 7, 2026)**
 
-> **This is the current focus.** Priority order: 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4a ✅ → 3.4b ✅ → 3.4c ✅ → 3.4d ✅ → engagement tracking (Phase B).
+> **Status:** All planned 3.x tasks landed. The system now schedules itself, builds a candidate pool, extracts per-user memory, and personalizes messages. Response-time personalization (Phase B) is intentionally deferred until real engagement data accumulates.
+>
+> Priority history: 3.1 ✅ → 3.2 ✅ → 3.3 ✅ → 3.4a ✅ → 3.4b ✅ → 3.4c ✅ → 3.4d ✅ → engagement tracking (Phase B, deferred).
 
 ---
 
@@ -942,53 +983,209 @@ Intentionally deferred until real engagement data exists. No infrastructure chan
 
 ---
 
-### Phase 4 — Researcher Dashboard Enhancements
+### Phase 4 — Heuristics Engine & Final UX (June Sprint) ← **current**
+
+> **Sprint goal:** Pivot the proactive system from news-driven cycling to the three research heuristics that define this thesis (Temporal, Affective, Behavioural Gap). Upgrade the LLM, intensify Android notifications per advisor requirements, and finish the researcher-facing controls so the system is experiment-ready by **end of June 2026**.
+>
+> Priority order: 4.1 → 4.2 → 4.3 → 4.4 → 4.5 → 4.6 → 4.7 → 4.8 → 4.9 (stretch).
 
 ---
 
-#### 4.1 APK generation pipeline
+#### 4.1 Deprecate `news_service.py` and remove from the data flow
 
-**Goal:** Researcher clicks "Download APK" in the admin dashboard. The server triggers a build with the correct experiment URL (already a production URL from Phase 2) baked into the APK and serves it as a file download.
+**Rationale:** Headline-triggered nudges are not part of the final research design. Notifications must now flow from heuristic signals (memory, sentiment, behavioural gaps) — not external news.
 
-**Context:** By this phase the production URL format is established (`https://lexi-app.vercel.app/e/<experimentId>`). The APK generation mechanism simply parameterizes the experiment ID portion.
+**Tasks:**
+
+- Delete `logic-python/services/news_service.py` and the `NEWS_API_KEY` env var from `.env`, `.env.example`, and `requirements.txt` references.
+- Remove all `get_fresh_headlines()` and `analyze_headline()` calls from `research_service.py`; strip the news-based branch of `build_candidate_pool()`.
+- Repurpose `original_headline` in `proactive_logs` as `trigger_source` (one of `"temporal"`, `"affective"`, `"gap"`, `"topic"`). Add a migration note for existing logs (no backfill needed — old field remains for historical entries).
+- Confirm the architecture diagram in §2 and the proactive flow in §4 no longer reference NewsAPI (already updated in this revision).
+- Keep the topic-fallback list (`technology`, `health`, etc.) only as a last-resort safety net when no heuristic fires for a user.
+
+---
+
+#### 4.2 Upgrade the primary LLM engine
+
+**Rationale:** The current OpenAI `gpt-3.5-turbo` + Groq `llama-3.3-70b` stack is too weak for nuanced Hebrew comprehension, emotional inference (4.4), and long-horizon memory reasoning. The advisor expects state-of-the-art models for the June experiments.
+
+**Tasks:**
+
+- In `logic-python/services/llm_service.py`, replace the `gpt-3.5-turbo` default in both `ProactiveLogic` and `LLMService` with `gpt-4o` (OpenAI) or `claude-3-5-sonnet-20240620` (Anthropic).
+- Introduce two env vars driving model selection:
+  ```
+  LLM_PROVIDER=openai     # or "anthropic"
+  LLM_MODEL=gpt-4o        # or "claude-3-5-sonnet-20240620"
+  ```
+- Re-route `analyze_headline` (now superseded), `generate_topic_message`, `extract_user_memory`, and `personalize_message_for_user` through the new provider abstraction.
+- Add `anthropic>=0.34.0` to `requirements.txt` if Claude is the chosen default.
+- **Per-experiment switching:** add `experiment.experimentFeatures.proactiveSettings.llmModel` and read it inside `ProactiveLogic.__init__`. Render a dropdown in `ProactiveSettingsModal.tsx` (Phase 4.7). If per-experiment routing proves fragile under the June timeline, force the upgrade globally and defer the dropdown to Phase 5.
+- Smoke-test on 10 real conversations: confirm Hebrew quality, tone matching, and emotional vocabulary are visibly better than the old stack.
+
+---
+
+#### 4.3 Temporal Heuristic — schedule from `future_mentions`
+
+**Goal:** Use the `future_mentions` already extracted into `proactiveMemory` (Phase 3.4) to time notifications around real events the user mentioned, plus a deterministic fixed-time fallback so even users with no future plans get baseline check-ins.
+
+**Implementation:**
+
+- New module `logic-python/heuristics/temporal.py` exposing `evaluate(user) -> Optional[ScheduledNudge]`.
+- Parse each `future_mention` string into a structured triple with one LLM call:
+  ```json
+  { "event": "trip to Eilat", "anchor_date": "2026-06-12", "lead_time_hours": 18 }
+  ```
+  Persist the parsed list to `proactiveMemory.parsed_future_mentions`.
+- The scheduler calls `temporal.evaluate()` every hour. If any parsed mention falls inside its lead-time window, queue a personalized check-in (e.g. *"מתרגש לקראת הטיול לאילת מחר?"*) and mark that mention as "fired" to prevent double-sends.
+- Keep the existing two fixed-time check-ins (10:00 / 18:00) as a baseline for users with no future mentions.
+- **Nice-to-have (4.9 stretch):** Google Calendar OAuth so the heuristic can read real calendar events rather than only memory-extracted mentions. Only attempt if 4.3–4.6 land early.
+
+---
+
+#### 4.4 Affective Heuristic — sentiment / emotion inference
+
+**Goal:** When a user shows high emotional load (stress, sadness, frustration, anger) in their most recent conversation, proactively check in a few hours later. This is the headline thesis contribution on the *emotionally aware proactive AI* axis.
+
+**Implementation:**
+
+- New module `logic-python/heuristics/affective.py`.
+- Add `analyze_conversation_emotion(messages)` to `llm_service.py` returning structured JSON:
+  ```json
+  {
+    "primary_emotion": "stressed",
+    "intensity": 0.82,
+    "needs_followup": true,
+    "suggested_delay_hours": 4
+  }
+  ```
+- Trigger the analysis when a conversation ends (`metadata_conversations.isFinished = true`), or as part of the per-user cycle in `research_service.py` (whichever is cheaper to instrument first).
+- If `intensity >= 0.7` and `needs_followup`, persist `pending_affective_followup = { emotion, intensity, scheduled_for }` on the user document. The scheduler fires it when `scheduled_for` has passed.
+- Pass the detected emotion + `conversation_insight` into `personalize_message_for_user` so the generated message tone matches (gentle, validating, non-judgmental — never overly cheerful at someone who is stressed).
+- Log every affective trigger in `proactive_logs` with `trigger_source="affective"` plus emotion + intensity for research analysis.
+
+---
+
+#### 4.5 Behavioural Gap Heuristic — intent vs. reporting
+
+**Goal:** Lightweight commitment tracking. If a user states an intent ("אני אנסה ללכת לחדר כושר מחר") and 24–48 hours pass without them mentioning whether they followed through, send a gentle, non-judgmental follow-up.
+
+**Implementation:**
+
+- Extend `extract_user_memory` in `llm_service.py` to also extract `stated_intents`:
+  ```json
+  [{ "intent": "go to the gym", "stated_at": "2026-06-02T19:00:00Z", "deadline_hint": "tomorrow" }]
+  ```
+  Persist to `proactiveMemory.open_intents` (array).
+- New module `logic-python/heuristics/behavioural_gap.py`:
+  1. Loads `open_intents` for the user.
+  2. For each intent older than 24h and younger than 48h, scans recent user messages with a focused LLM call (`check_intent_completion`) — answers `{ resolved: bool, outcome: "positive" | "negative" | "unknown" }`.
+  3. If unresolved (`outcome == "unknown"`), queues a check-in (*"איך הלך עם החדר כושר?"*).
+  4. If resolved, closes the intent (`open_intents` → archived) and skips the nudge.
+- Log every gap trigger in `proactive_logs` with `trigger_source="gap"` plus the intent text, for later qualitative analysis in the thesis.
+
+---
+
+#### 4.6 High-intensity Android notifications (UX requirement)
+
+**Rationale:** Advisor explicitly requires notifications to wake the screen and be visually unmissable — default `IMPORTANCE_DEFAULT` is too easy for participants to ignore.
+
+**Tasks in `android-app/.../LexiMessagingService.kt`:**
+
+- Recreate the channel as `lexi_nudges_v2` (channels are immutable after creation, so the ID must change) with `IMPORTANCE_HIGH` — or `IMPORTANCE_MAX` if the channel doesn't already exist on the device.
+- Per-notification builder:
+  - `setPriority(NotificationCompat.PRIORITY_HIGH)`
+  - `setCategory(NotificationCompat.CATEGORY_MESSAGE)`
+  - `setVisibility(NotificationCompat.VISIBILITY_PUBLIC)`
+  - Custom vibration + LED pattern
+- `setFullScreenIntent(pendingIntent, true)` with a fallback `PendingIntent` so the notification takes over the lock screen.
+- Use a unique `notificationId` per nudge and `setGroupSummary(false)` so Android does not bundle multiple Lexi messages into a silent "5 new messages" group.
+- Add `USE_FULL_SCREEN_INTENT` permission to `AndroidManifest.xml` (required since Android 14).
+- Manual QA on a real phone: screen must light up, sound must play, the notification must remain visible until explicitly dismissed.
+
+---
+
+#### 4.7 Admin Dashboard — heuristic toggles + prompt tuning
+
+**Goal:** The researcher controls each heuristic per experiment without touching code, and the system prompts reflect the correct institution (BGU, not Cambridge).
+
+**Tasks:**
+
+- Extend `experiments.experimentFeatures.proactiveSettings`:
+  ```json
+  {
+    "heuristics": {
+      "temporal": true,
+      "affective": true,
+      "behaviouralGap": true
+    },
+    "llmModel": "gpt-4o"
+  }
+  ```
+- In `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`, render three checkboxes (Temporal / Affective / Behavioural Gap) and the `llmModel` selector (`gpt-4o` / `claude-3-5-sonnet-20240620`).
+- In `logic-python/services/research_service.py`, gate each heuristic invocation on `experiment.experimentFeatures.proactiveSettings.heuristics[name]`.
+- **System prompt audit — "Cambridge" → "Ben-Gurion University (BGU)":** search every prompt-bearing string across `logic-python/` and `Lexi/server/src/` and replace the institution. Audit at minimum: agent system prompt, `extract_user_memory`, `personalize_message_for_user`, and any participant-facing description templates.
+
+---
+
+#### 4.8 APK generation button in the dashboard (promoted from the old Researcher Dashboard phase)
+
+**Goal:** Researcher clicks "Generate APK" inside the admin dashboard, the server builds a signed APK wired to a specific experiment ID, and the dashboard exposes a download link. Originally scheduled as the first task of the old Researcher Dashboard phase — **promoted into the June sprint** because the heuristic experiments need quick APK turnaround per cohort.
 
 **Implementation approach:**
 
-1. Install Android build tools (Gradle) on the build server or use GitHub Actions.
-2. Add a `/experiments/:id/apk` endpoint to the Lexi server.
-3. When called, the server dispatches a build with the production URL:
+1. Add `POST /experiments/:id/apk` to the Lexi Node server.
+2. The endpoint dispatches a GitHub Actions workflow (`build-apk.yml`) with the experiment ID as a workflow input.
+3. The workflow runs:
    ```bash
    ./gradlew assembleRelease \
-     -PEXPERIMENT_URL="https://lexi-app.vercel.app/e/EXPERIMENT_ID" \
-     -PBASE_URL="https://lexi-app.vercel.app"
+     -PEXPERIMENT_URL="https://master-thesis-2026-2027-code-base.vercel.app/e/EXPERIMENT_ID" \
+     -PBASE_URL="https://master-thesis-2026-2027-code-base.vercel.app"
    ```
-4. The resulting `.apk` is streamed back to the browser as a file download or served from cloud storage (S3, GCS).
+4. The signed APK is uploaded as a workflow artifact (or to S3/GCS), and the dashboard polls the Actions API for the download URL.
+5. UI: a "Generate APK" button in the experiment row → opens a modal showing build progress → reveals the download link when ready.
 
-Alternatively, use a GitHub Actions workflow triggered via the GitHub API — on each "generate APK" request the server calls the Actions API with the experiment ID as an input, the workflow builds and uploads the APK as an artifact, and the dashboard polls for the download URL.
+Alternatively, run Gradle on a small build VM if GitHub Actions latency is unacceptable. Either path is acceptable for June.
 
 ---
 
-#### 4.2 Proactive settings UI refinement (`ProactiveSettingsModal.tsx`)
+#### 4.9 Nice-to-haves (stretch goals, only if 4.1–4.8 land early)
 
-Add configuration fields to the existing proactive settings modal:
+| Item | Effort | Notes |
+|------|--------|-------|
+| Google Calendar OAuth for Temporal heuristic (4.3) | Medium | Adds richer signal beyond memory-extracted future mentions. |
+| Logo refresh — Android app icon + dashboard header | Low | Pure visual polish; can be done in parallel by a designer. |
+| Auto-generated system documentation | Medium | Set up MkDocs Material (or similar) pulling from JSDoc / Python docstrings / `PLAN.md`. Useful as a thesis-submission appendix. |
+| Per-user model switching UI | Medium | If global LLM upgrade in 4.2 proves uneven across cohorts, expose `agent.llmModel` and let the researcher tune it per agent. |
+
+---
+
+### Phase 5 — Researcher Dashboard Enhancements
+
+> **Note (May 26, 2026):** The APK-generation task that originally sat here has been promoted to Phase 4.8 in the June sprint. The remaining settings-UI polish stays in this phase.
+
+---
+
+#### 5.1 Proactive settings UI refinement (`ProactiveSettingsModal.tsx`)
+
+Beyond the heuristic toggles added in Phase 4.7, add configuration fields to the existing proactive settings modal:
 
 - **Schedule:** choose between "every N hours" or "fixed times" (morning / evening)
 - **Agent:** select which AI agent handles proactive conversation-starters
-- **Notification log:** table of sent notifications per participant with open/response rate
+- **Notification log:** table of sent notifications per participant with open/response rate (per heuristic — Temporal / Affective / Gap)
 - **Test notification:** button to send a test push to the researcher's own device
 
 ---
 
 
-### Phase 5 (Deferred) — FCM → Conversation Deep-Link
+### Phase 6 (Deferred) — FCM → Conversation Deep-Link
 
-> **Deferred to Phase 5.** This is UX polish — the system already works end-to-end and research data is collected correctly without it. The user tapping a notification can navigate to the conversation manually. Implement this before the real experiment launch but after the proactive logic is solid.
+> **Deferred to Phase 6.** This is UX polish — the system already works end-to-end and research data is collected correctly without it. The user tapping a notification can navigate to the conversation manually. Implement this before the real experiment launch but after the heuristics in Phase 4 are solid.
 
 This phase makes notification taps land directly in the correct conversation rather than the app's home screen.
 
 ---
 
-#### 5.1 Create conversation in DB before sending FCM
+#### 6.1 Create conversation in DB before sending FCM
 
 **Current behavior:** Python sends FCM and injects `firstChatSentence` but no conversation document exists yet — the conversation is only created when the user opens the app and the chat initializes.
 
@@ -1012,7 +1209,7 @@ def create_conversation_for_user(self, user_id: str, experiment_id: str) -> str:
 
 ---
 
-#### 5.2 Pass conversation context in FCM data payload
+#### 6.2 Pass conversation context in FCM data payload
 
 **Fix:** Include `experimentId` and `conversationId` in the FCM `data` field alongside the notification:
 
@@ -1033,7 +1230,7 @@ message = messaging.Message(
 
 ---
 
-#### 5.3 Deep-link from notification tap to conversation
+#### 6.3 Deep-link from notification tap to conversation
 
 **Fix in `LexiMessagingService.kt`:** Extract `conversationId` from `message.data` and build a URL that opens the specific conversation:
 
@@ -1066,19 +1263,19 @@ private fun showNotification(title: String, body: String, conversationId: String
 
 ---
 
-### Phase 6 — Quality & Research
+### Phase 7 — Quality & Research
 
 ---
 
-#### 6.1 Conversation quality improvements
+#### 7.1 Conversation quality improvements
 
-- Tune system prompts for the proactive conversation-starter agent
-- Experiment with different LLM models (GPT-4o, Claude Sonnet) for better Hebrew output
-- A/B test different notification tones: question-based vs statement-based vs news-based
+- Tune system prompts for the proactive conversation-starter agent (note: GPT-4o / Claude 3.5 Sonnet upgrade landed in Phase 4.2)
+- A/B test different notification tones per heuristic: temporal anticipation vs affective check-in vs gap follow-up
+- Iterate on Hebrew tone calibration based on real participant transcripts
 
 ---
 
-#### 6.2 Analytics and engagement logging
+#### 7.2 Analytics and engagement logging
 
 Add tracking for the full notification → conversation funnel:
 
@@ -1094,7 +1291,7 @@ Export these metrics from the admin dashboard's Data Panel.
 
 ---
 
-#### 6.3 Security hardening
+#### 7.3 Security hardening
 
 | Action | Priority |
 |--------|----------|
@@ -1107,7 +1304,7 @@ Export these metrics from the admin dashboard's Data Panel.
 
 ---
 
-### Phase 7 — Cloud Deployment ✅
+### Phase 8 — Cloud Deployment ✅
 
 > **Status: Fully live as of April 29, 2026.**
 >
@@ -1125,7 +1322,7 @@ The goal of this phase is a fully functional, end-to-end proactive experiment ru
 
 ---
 
-#### 7.1 Choose and provision cloud infrastructure
+#### 8.1 Choose and provision cloud infrastructure
 
 All three server-side components need a persistent, publicly reachable host.
 
@@ -1140,7 +1337,7 @@ All three server-side components need a persistent, publicly reachable host.
 
 ---
 
-#### 7.2 Deploy the Lexi Node.js server
+#### 8.2 Deploy the Lexi Node.js server
 
 1. Push the `Lexi/server` directory to a Git repository (or use the existing repo).
 2. Connect it to Render/Railway — set the build command to `npm install && npm run build` and start command to `node index.js`.
@@ -1159,7 +1356,7 @@ FRONTEND_URL=https://lexi-app.vercel.app
 
 ---
 
-#### 7.3 Deploy the Lexi React client
+#### 8.3 Deploy the Lexi React client
 
 1. Set the client's environment variable to point to the cloud server:
 
@@ -1176,7 +1373,7 @@ REACT_APP_SERVER_URL=https://lexi-api.onrender.com
 
 ---
 
-#### 7.4 Update CORS on the Node.js server
+#### 8.4 Update CORS on the Node.js server
 
 In `Lexi/server/src/server.ts`, update the CORS origin to allow the deployed client URL (alongside `localhost` for development):
 
@@ -1192,7 +1389,7 @@ app.use(cors({
 
 ---
 
-#### 7.5 Update the Android APK for production
+#### 8.5 Update the Android APK for production
 
 This is the critical step that allows real participants to use the app on physical devices.
 
@@ -1255,7 +1452,7 @@ The `.apk` file is at `app/build/outputs/apk/release/app-release.apk` and can be
 
 ---
 
-#### 7.6 Deploy the Python engine to a cloud host
+#### 8.6 Deploy the Python engine to a cloud host
 
 The Python engine must run continuously on a cloud VM to send scheduled notifications.
 
@@ -1294,7 +1491,7 @@ python scheduler.py
 
 ---
 
-#### 7.7 Ensure Firebase FCM works with real devices
+#### 8.7 Ensure Firebase FCM works with real devices
 
 FCM on real physical Android devices requires no special configuration beyond what is already in `google-services.json` — the token generation is automatic. However, verify:
 
@@ -1304,16 +1501,16 @@ FCM on real physical Android devices requires no special configuration beyond wh
 
 ---
 
-#### 7.8 End-to-end test on a real Android device
+#### 8.8 End-to-end test on a real Android device
 
 Before launching the experiment, run through the full flow on a physical phone:
 
-1. Install the release APK (from 2.5) on a physical Android phone (not an emulator).
+1. Install the release APK (from 8.5) on a physical Android phone (not an emulator).
 2. Open the app — it should load `https://lexi-app.vercel.app/e/<experimentId>`.
 3. Register a test user — the FCM token should be stored in MongoDB Atlas.
 4. Run one manual proactive cycle from the cloud VM: `python main.py`.
 5. Verify the push notification appears on the physical device.
-6. Tap the notification — the app should open (Phase 3 will add deep-linking to the exact conversation).
+6. Tap the notification — the app should open (Phase 6 will add deep-linking to the exact conversation).
 7. Confirm the `firstChatSentence` appears as the AI's opening message in the chat.
 
 Only after this test passes is the system ready for real participants.

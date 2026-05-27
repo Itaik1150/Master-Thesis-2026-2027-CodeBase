@@ -16,8 +16,8 @@ MEMORY_CONVERSATIONS_LIMIT = 10    # how many past conversations to read per use
 
 from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
-from services.news_service import NewsService
 from services.llm_service import ProactiveLogic
+from heuristics import temporal
 
 class ResearchService:
     """
@@ -30,15 +30,7 @@ class ResearchService:
         service_account_path = os.path.join(os.path.dirname(__file__), 'lexi-72330-firebase-adminsdk-fbsvc-49c2c6ee82.json')
         self.fcm_service = FCMService(service_account_json=service_account_path, dry_run=False)
         
-        # Initialize new services
-        self.news_service = NewsService()
         self.llm_service = ProactiveLogic()
-        
-        # Timing and caching attributes
-        self.last_news_fetch = None
-        self.news_fetch_interval = 30 * 60  # 30 minutes in seconds
-        self.cached_headlines = []
-        self.headline_cache_expiry = None
     
     def inject_prompt(self, user_id: str, message: str) -> bool:
         """
@@ -395,60 +387,23 @@ class ResearchService:
         finally:
             mongodb_client.disconnect()
 
-    # === NEW PROACTIVE CYCLE METHODS ===
-    
-    def should_fetch_news(self) -> bool:
-        """Check if enough time has passed since last news fetch"""
-        if not self.last_news_fetch:
-            return True
-        return (datetime.now() - self.last_news_fetch).total_seconds() > self.news_fetch_interval
-
-    def get_fresh_headlines(self) -> List[str]:
-        """Get fresh headlines or return cached if still valid"""
-        if self.should_fetch_news():
-            print("📰 Fetching fresh headlines...")
-            headlines_data = self.news_service.fetch_israel_headlines(max_results=5)
-            self.cached_headlines = [h['title'] for h in headlines_data]
-            self.last_news_fetch = datetime.now()
-            self.headline_cache_expiry = datetime.now() + timedelta(hours=1)
-            print(f"✅ Fetched {len(self.cached_headlines)} fresh headlines")
-        else:
-            print(f"📋 Using cached headlines ({len(self.cached_headlines)} available)")
-        return self.cached_headlines
+    # === PROACTIVE CYCLE METHODS ===
 
     def build_candidate_pool(self) -> List[Dict]:
         """
-        Build a pool of up to MAX_CANDIDATES approved messages per cycle.
+        Build a pool of up to MAX_CANDIDATES topic-based messages per cycle.
 
-        Strategy:
-          1. Fetch fresh headlines → run each through LLM → collect up to 3 news candidates.
-          2. Fill remaining slots from a shuffled topic list → collect topic candidates.
+        News-triggered candidates were removed in Phase 4.1. Heuristic-sourced
+        candidates (temporal / affective / behavioural-gap) will be prepended
+        here in Phase 4.3–4.5 before the topic fill runs.
 
         Each candidate dict has:
-          original_headline, generated_message, source ("news"|"topic"),
+          trigger_source, generated_message, source ("topic"),
           topic_label, timestamp, llm_response
         """
         candidates: List[Dict] = []
 
-        # ── News-based candidates (up to 3) ─────────────────────────────────
-        headlines = self.get_fresh_headlines()
-        for headline in headlines:
-            if len(candidates) >= 3:
-                break
-            print(f"🧠 Analyzing: {headline}")
-            analysis = self.llm_service.analyze_headline(headline)
-            if analysis.get("should_send"):
-                candidates.append({
-                    "original_headline": headline,
-                    "generated_message": analysis["message"],
-                    "source": "news",
-                    "topic_label": "news",
-                    "timestamp": datetime.now(),
-                    "llm_response": analysis,
-                })
-                print(f"✅ News candidate: {analysis['message']}")
-            else:
-                print(f"❌ Rejected: {headline[:60]}...")
+        # ── Heuristic candidates will be injected here in Phase 4.3–4.5 ────
 
         # ── Topic-based fill (up to MAX_CANDIDATES total) ────────────────────
         topics = ["technology", "health", "travel", "culture", "sport",
@@ -460,7 +415,7 @@ class ResearchService:
             msg = self.llm_service.generate_topic_message(topic)
             if msg:
                 candidates.append({
-                    "original_headline": f"[topic: {topic}]",
+                    "trigger_source": "topic",
                     "generated_message": msg,
                     "source": "topic",
                     "topic_label": topic,
@@ -469,9 +424,7 @@ class ResearchService:
                 })
                 print(f"💡 Topic candidate [{topic}]: {msg}")
 
-        print(f"🎯 Pool ready: {len(candidates)} candidates "
-              f"({sum(1 for c in candidates if c['source']=='news')} news, "
-              f"{sum(1 for c in candidates if c['source']=='topic')} topic)")
+        print(f"🎯 Pool ready: {len(candidates)} topic candidates")
         return candidates
 
     def build_basic_memory(self, user: Dict) -> Dict:
@@ -736,14 +689,27 @@ class ResearchService:
             memory = {}
             try:
                 if mongodb_client.connect():
-                    basic = self.build_basic_memory(user)
+                    basic     = self.build_basic_memory(user)
                     extracted = self.extract_conversation_memory(user_id)
-                    memory = {**basic, **extracted}
+                    memory    = {**basic, **extracted}
+
+                    # ── Guard: preserve existing rich fields when LLM extraction
+                    # fails (e.g. timeout) so we don't overwrite good data with
+                    # empty lists. Also always carry forward fired_temporal_mentions
+                    # so temporal nudges can't re-fire after a failed extraction.
+                    existing_pm = user.get("proactiveMemory") or {}
+                    for field in ("future_mentions", "interests", "conversation_insight"):
+                        if not memory.get(field) and existing_pm.get(field):
+                            memory[field] = existing_pm[field]
+                    if existing_pm.get("fired_temporal_mentions"):
+                        memory["fired_temporal_mentions"] = existing_pm["fired_temporal_mentions"]
+
                     self.save_user_memory(user_id, memory)
                     print(
                         f"🧠 Memory for {username}: "
                         f"sent={memory.get('topics_sent_recently', [])}, "
                         f"interests={memory.get('interests', [])}, "
+                        f"future_mentions={len(memory.get('future_mentions') or [])}, "
                         f"lang={memory.get('preferred_language', 'he')}"
                     )
             except Exception as e:
@@ -751,9 +717,32 @@ class ResearchService:
             finally:
                 mongodb_client.disconnect()
 
-            # 3.4d: pick + personalize. Falls back gracefully when memory is empty
-            # or the LLM call fails (returns the deterministic candidate unchanged).
-            message = self.select_personalized_message(candidates, memory)
+            # ── Phase 4.3: Temporal heuristic ────────────────────────────────
+            # Check before the topic pool. If a future mention is within its
+            # lead-time window, build a temporal candidate and use it directly.
+            temporal_nudge = temporal.evaluate(user)
+            if temporal_nudge:
+                print(
+                    f"🕐 Temporal heuristic fired for {username}: "
+                    f"'{temporal_nudge.mention_text[:40]}' "
+                    f"({temporal_nudge.hours_until:.1f}h away)"
+                )
+                seed = (
+                    f"The user mentioned '{temporal_nudge.mention_text}' "
+                    f"is coming up in about {int(temporal_nudge.hours_until)} hours."
+                )
+                temporal_candidate = {
+                    "trigger_source": "temporal",
+                    "generated_message": seed,
+                    "source": "temporal",
+                    "topic_label": "temporal",
+                    "timestamp": datetime.now(),
+                    "llm_response": {},
+                }
+                message = self.select_personalized_message([temporal_candidate], memory)
+            else:
+                # ── Default: pick + personalize from topic pool ───────────────
+                message = self.select_personalized_message(candidates, memory)
             if not message:
                 print(f"⚠️  No candidate available for {username}, skipping")
                 continue
@@ -789,7 +778,16 @@ class ResearchService:
                         results["injected"] += 1
                         print(f"💬 Message injected for {username}")
 
-                        # Step 3: Log success (reconnect — inject_prompt closed the client)
+                        # Step 3: If temporal heuristic fired, stamp the mention
+                        if temporal_nudge:
+                            temporal.mark_fired(
+                                user_id,
+                                temporal_nudge.mention_text,
+                                temporal_nudge.when_iso,
+                                mongodb_client,
+                            )
+
+                        # Step 4: Log success (reconnect — inject_prompt closed the client)
                         self.log_proactive_event(cycle_id, user_id, message, "sent", notification_result)
                     else:
                         results["injection_failed"] += 1
@@ -821,7 +819,7 @@ class ResearchService:
                 "cycle_id": cycle_id,
                 "timestamp": datetime.now(timezone.utc),
                 "user_id": user_id,
-                "original_headline": message["original_headline"],
+                "trigger_source": message.get("trigger_source", "topic"),
                 "generated_message": message["generated_message"],
                 "topic_label": message.get("topic_label", "general"),
                 "status": status,
