@@ -41,7 +41,7 @@ After every fix:
 The system consists of:
 - Android app (WebView + FCM)
 - Lexi Web (React + Node.js)
-- Python proactive engine
+- Python proactive engine (heuristics engine — Temporal / Affective / Behavioural Gap)
 - MongoDB
 
 Always consider how changes affect all components.
@@ -53,34 +53,42 @@ Always consider how changes affect all components.
 - Do NOT change naming conventions
 
 
-Current Task:
+Current Phase: Phase 4 — Heuristics Engine & Final UX (June Sprint)
 
-Phase 3.4 is fully complete. Awaiting user direction on the next phase.
-
-Phase 3 status:
+Phase 3 is fully complete:
 - 3.1 ✅ tie isProactive to experiment settings
-- 3.2 ✅ scheduling + time window
-- 3.3 ✅ candidate message pool
+- 3.2 ✅ scheduling + time window (scheduler.py daemon)
+- 3.3 ✅ candidate message pool (4–6 topic/news candidates per cycle)
 - 3.4a ✅ basic memory (demographics + recent sent topics)
 - 3.4b ✅ LLM extraction (interests / future_mentions / insight / language)
-- 3.4c ✅ persist proactiveMemory to the user document in MongoDB
+- 3.4c ✅ persist proactiveMemory to MongoDB
 - 3.4d ✅ memory-aware per-user message generation (personalize_message_for_user)
 
-Likely next options (ask the user):
-- Phase 4 — Researcher dashboard enhancements (proactive settings UI, APK download, etc.)
-- Phase 3 deferred B — Engagement tracking (per-user response-time learning)
-- Phase 5 — FCM → Conversation Deep-Link (UX polish)
+Phase 4 task order (work top-to-bottom, one task at a time):
+- 4.1 ✅ Deprecate news_service.py — deleted news_service.py + 2 test files; stripped headline methods from research_service.py; renamed original_headline → trigger_source in candidate dicts and proactive_logs
+- 4.2 ✅ Upgrade LLM — gpt-3.5-turbo replaced with gpt-4o default; LLM_PROVIDER + LLM_MODEL env vars added; _call_llm() abstraction routes to OpenAI or Anthropic; all 4 ProactiveLogic methods unified through it
+- 4.3 ✅ Temporal Heuristic — heuristics/temporal.py created; evaluate() checks future_mentions within 6–24h window; mark_fired() stamps fired_temporal_mentions in MongoDB; integrated into coordinated_send_and_inject before topic-pool path
+- 4.4 ⏳ Affective Heuristic — new heuristics/affective.py; analyze_conversation_emotion in llm_service.py; persist pending_affective_followup; tone-matched personalization; log trigger_source="affective"
+- 4.5 ⏳ Behavioural Gap Heuristic — extend extract_user_memory to capture stated_intents; new heuristics/behavioural_gap.py; check_intent_completion LLM call; queue follow-up if unresolved after 24–48h; log trigger_source="gap"
+- 4.6 ⏳ High-intensity Android notifications — LexiMessagingService.kt: lexi_nudges_v2 channel, IMPORTANCE_HIGH, setFullScreenIntent, USE_FULL_SCREEN_INTENT permission, unique notificationId per nudge, no silent grouping
+- 4.7 ⏳ Dashboard heuristic toggles + prompt tuning — extend proactiveSettings schema (heuristics + llmModel); add checkboxes + model selector in ProactiveSettingsModal.tsx; gate heuristics in research_service.py; replace "Cambridge" → "Ben-Gurion University (BGU)" in all prompts
+- 4.8 ⏳ APK generation button — POST /experiments/:id/apk endpoint; GitHub Actions build-apk.yml; dashboard "Generate APK" button + progress modal + download link
+- 4.9 💡 Stretch: Google Calendar OAuth for Temporal heuristic; logo refresh; auto-generated documentation
 
-See PLAN.md sections 3.4 (full spec) and 4 / 5 / Phase B for what each next step entails.
+Key architectural constraints for Phase 4:
+- news_service.py is DEPRECATED. Do not add any new calls to it.
+- The primary LLM will be GPT-4o or Claude 3.5 Sonnet. Do not use gpt-3.5-turbo for new code.
+- All proactive_logs entries must include trigger_source ∈ {temporal, affective, gap, topic}.
+- Each heuristic lives in its own module under logic-python/heuristics/. Do not put heuristic logic directly into research_service.py.
+- Heuristics must be gated by experiment.experimentFeatures.proactiveSettings.heuristics[name] (added in 4.7). Until 4.7 is done, treat them as always-enabled.
+- Institution name in ALL system prompts is "Ben-Gurion University (BGU)", not "Cambridge".
 
 
 Project Context:
 
-See PROJECT_PLAN.md for full system architecture, roadmap, known bugs, and current state.
-
-Use it only as reference.
-Do NOT try to implement multiple phases at once.
-Always focus only on the current task defined above.
+See PLAN.md for full system architecture, roadmap, known bugs, and current state.
+Focus on Phase 4 tasks only. Do NOT implement Phase 5 or later unless explicitly asked.
+Do NOT try to implement multiple Phase 4 tasks at once.
 
 
 If you break any of these rules, stop and explain why.

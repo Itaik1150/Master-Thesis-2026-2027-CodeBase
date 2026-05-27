@@ -122,12 +122,91 @@ class ProactiveLogic:
     """
     
     def __init__(self):
-        """Initialize proactive logic with OpenAI API configuration"""
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        if not self.api_key:
-            raise ValueError("OPENAI_API_KEY not found in environment variables")
-        self.api_url = "https://api.openai.com/v1/chat/completions"
+        self.provider = os.getenv("LLM_PROVIDER", "openai").lower()
+        self.model    = os.getenv("LLM_MODEL",    "gpt-4o")
+        self.api_url  = "https://api.openai.com/v1/chat/completions"
+
+        if self.provider == "anthropic":
+            self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+            if not self.anthropic_api_key:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY not found in environment variables "
+                    "(required when LLM_PROVIDER=anthropic)"
+                )
+            self.api_key = ""
+        else:
+            self.api_key = os.getenv("OPENAI_API_KEY", "")
+            if not self.api_key:
+                raise ValueError("OPENAI_API_KEY not found in environment variables")
+
+        print(f"🤖 LLM engine: {self.provider.upper()} / {self.model}")
         
+    def _call_llm(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 120,
+        json_mode: bool = False,
+    ) -> str:
+        """
+        Single dispatch point for all LLM calls in ProactiveLogic.
+        Routes to OpenAI or Anthropic based on self.provider / self.model.
+        Raises on HTTP or network errors — callers handle their own fallbacks.
+        """
+        if self.provider == "anthropic":
+            # Anthropic Messages API — system is a separate top-level field
+            system_content = ""
+            anthropic_messages = []
+            for m in messages:
+                if m["role"] == "system":
+                    system_content = m["content"]
+                else:
+                    anthropic_messages.append(m)
+
+            headers = {
+                "x-api-key": self.anthropic_api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            }
+            if json_mode:
+                system_content = (system_content + "\n\nReturn ONLY valid JSON, no other text.").strip()
+
+            body: Dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": max_tokens,
+                "messages": anthropic_messages,
+            }
+            if system_content:
+                body["system"] = system_content
+
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=body,
+                timeout=45,
+            )
+            resp.raise_for_status()
+            return resp.json()["content"][0]["text"].strip()
+
+        else:
+            # OpenAI-compatible API
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            }
+            body = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            if json_mode:
+                body["response_format"] = {"type": "json_object"}
+
+            resp = requests.post(self.api_url, headers=headers, json=body, timeout=45)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+
     def analyze_headline(self, headline: str) -> Dict[str, any]:
         """
         Analyze a news headline and decide if it's suitable for proactive conversation
@@ -162,56 +241,23 @@ Output: {"should_send": false, "message": "NONE"}
 Input: "New Coffee Shop Opens Downtown"
 Output: {"should_send": true, "message": "ראית את בית הקפה החדש שנפתח?"}"""
 
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-            
-            data = {
-                "model": "gpt-3.5-turbo",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Analyze this headline: '{headline}'"
-                    }
-                ],
-                "temperature": 0.3,
-                "max_tokens": 100
-            }
-            
-            response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            # Extract the response text
-            if "choices" in result and len(result["choices"]) > 0:
-                response_text = result["choices"][0]["message"]["content"].strip()
-                
-                # Try to parse as JSON
-                try:
-                    analysis = json.loads(response_text)
-                    
-                    # Validate the response format
-                    if "should_send" in analysis and "message" in analysis:
-                        return analysis
-                    else:
-                        print(f"⚠️ Invalid response format: {analysis}")
-                        return {"should_send": False, "message": "NONE"}
-                        
-                except json.JSONDecodeError:
-                    print(f"⚠️ Could not parse JSON response: {response_text}")
-                    return {"should_send": False, "message": "NONE"}
-            else:
-                print(f"⚠️ No response from OpenAI")
+            msgs = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": f"Analyze this headline: '{headline}'"},
+            ]
+            response_text = self._call_llm(msgs, temperature=0.3, max_tokens=100, json_mode=True)
+            try:
+                analysis = json.loads(response_text)
+                if "should_send" in analysis and "message" in analysis:
+                    return analysis
+                print(f"⚠️ Invalid response format: {analysis}")
                 return {"should_send": False, "message": "NONE"}
-                
+            except json.JSONDecodeError:
+                print(f"⚠️ Could not parse JSON response: {response_text}")
+                return {"should_send": False, "message": "NONE"}
+
         except requests.exceptions.RequestException as e:
-            print(f"❌ Network error calling OpenAI: {e}")
+            print(f"❌ Network error calling LLM: {e}")
             return {"should_send": False, "message": "NONE"}
         except Exception as e:
             print(f"❌ Error analyzing headline: {e}")
@@ -265,26 +311,12 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
         )
         user_prompt = f"User messages (most recent last):\n{joined}"
 
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
-        data = {
-            "model": "gpt-3.5-turbo",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.2,
-            "max_tokens": 250,
-            "response_format": {"type": "json_object"},
-        }
-
+        msgs = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ]
         try:
-            response = requests.post(self.api_url, headers=headers, json=data, timeout=15)
-            response.raise_for_status()
-            result = response.json()
-            text = result["choices"][0]["message"]["content"].strip()
+            text   = self._call_llm(msgs, temperature=0.2, max_tokens=250, json_mode=True)
             parsed = json.loads(text)
 
             # Normalize future_mentions to the new {text, when_iso} shape.
@@ -466,25 +498,12 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
             f"PRIMARY FOCUS for this message: {primary_focus}"
         )
 
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
-        data = {
-            "model": "gpt-3.5-turbo",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_payload},
-            ],
-            "temperature": 0.7,
-            "max_tokens": 80,
-        }
-
+        msgs_payload = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_payload},
+        ]
         try:
-            response = requests.post(self.api_url, headers=headers, json=data, timeout=15)
-            response.raise_for_status()
-            result = response.json()
-            text = result["choices"][0]["message"]["content"].strip()
+            text = self._call_llm(msgs_payload, temperature=0.7, max_tokens=80)
             # Strip wrapping quotes the model sometimes adds
             if (text.startswith('"') and text.endswith('"')) or (
                 text.startswith("'") and text.endswith("'")
@@ -506,37 +525,21 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
         Returns:
             Hebrew message string, or empty string on failure.
         """
+        msgs = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a social interaction assistant for a research experiment at "
+                    "Ben-Gurion University (BGU). "
+                    "Generate a short, friendly, open-ended conversation starter in Hebrew (max 15 words) "
+                    "about the given topic. The message should feel natural and invite a response. "
+                    "Return ONLY the Hebrew sentence, nothing else."
+                ),
+            },
+            {"role": "user", "content": f"Topic: {topic}"},
+        ]
         try:
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-            data = {
-                "model": "gpt-3.5-turbo",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a social interaction assistant for an Israeli research experiment. "
-                            "Generate a short, friendly, open-ended conversation starter in Hebrew (max 15 words) "
-                            "about the given topic. The message should feel natural and invite a response. "
-                            "Return ONLY the Hebrew sentence, nothing else."
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Topic: {topic}"
-                    }
-                ],
-                "temperature": 0.7,
-                "max_tokens": 60
-            }
-            response = requests.post(self.api_url, headers=headers, json=data, timeout=10)
-            response.raise_for_status()
-            result = response.json()
-            if "choices" in result and result["choices"]:
-                return result["choices"][0]["message"]["content"].strip()
-            return ""
+            return self._call_llm(msgs, temperature=0.7, max_tokens=60)
         except Exception as e:
             print(f"❌ Error generating topic message: {e}")
             return ""
