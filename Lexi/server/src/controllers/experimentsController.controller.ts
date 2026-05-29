@@ -6,14 +6,16 @@ import { formsService } from '../services/forms.service';
 import { usersService } from '../services/users.service';
 import { requestHandler } from '../utils/requestHandler';
 
+// Strip IPv4-mapped IPv6 prefix so ::ffff:1.2.3.4 and 1.2.3.4 match.
+const normalizeIp = (ip: string): string =>
+    ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+
 const getClientIp = (req: Request): string => {
     const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) {
-        return (Array.isArray(forwarded) ? forwarded[0] : forwarded)
-            .split(',')[0]
-            .trim();
-    }
-    return req.socket?.remoteAddress || req.ip || 'unknown';
+    const raw = forwarded
+        ? (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',')[0].trim()
+        : req.socket?.remoteAddress || req.ip || 'unknown';
+    return normalizeIp(raw);
 };
 
 class ExperimentsController {
@@ -111,7 +113,7 @@ class ExperimentsController {
     // and returns the associated experimentId so the app can lock itself in.
     matchSession = requestHandler(async (req: Request, res: Response) => {
         const ip = getClientIp(req);
-        const windowStart = new Date(Date.now() - 15 * 60 * 1000);
+        const windowStart = new Date(Date.now() - 60 * 60 * 1000); // 60-min window
 
         const db = mongoose.connection.db;
         const session = await db.collection('apk_sessions').findOneAndUpdate(

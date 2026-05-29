@@ -8,15 +8,17 @@ const APK_DOWNLOAD_URL =
 const FRONTEND_BASE_URL =
     process.env.FRONTEND_URL || 'https://master-thesis-2026-2027-code-base.vercel.app';
 
+// Strip IPv4-mapped IPv6 prefix so ::ffff:1.2.3.4 and 1.2.3.4 match.
+const normalizeIp = (ip: string): string =>
+    ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+
 // Extract the real client IP, accounting for Render's reverse proxy.
 const getClientIp = (req: Request): string => {
     const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) {
-        return (Array.isArray(forwarded) ? forwarded[0] : forwarded)
-            .split(',')[0]
-            .trim();
-    }
-    return req.socket?.remoteAddress || req.ip || 'unknown';
+    const raw = forwarded
+        ? (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',')[0].trim()
+        : req.socket?.remoteAddress || req.ip || 'unknown';
+    return normalizeIp(raw);
 };
 
 // Minimal mobile-first landing page returned as raw HTML.
