@@ -1,4 +1,5 @@
-# Firebase credentials (keep private)
+# Secrets — never commit these
+.env
 *-firebase-adminsdk*.json
 
 # Python cache
