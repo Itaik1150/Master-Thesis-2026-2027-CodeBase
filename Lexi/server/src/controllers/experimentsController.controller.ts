@@ -60,6 +60,26 @@ class ExperimentsController {
         console.log('UPDATING EXPERIMENT:', req.body);
         const { experiment } = req.body;
         await experimentsService.updateExperiment(experiment);
+
+        // When proactive is toggled ON, ensure existing users in this experiment
+        // that already have an FCM token also get isProactive=true.
+        // Handles the case where proactive was enabled after users already registered.
+        const proactiveEnabled = experiment?.experimentFeatures?.proactiveSettings?.enabled;
+        if (proactiveEnabled) {
+            const db = mongoose.connection.db;
+            const result = await db.collection('users').updateMany(
+                {
+                    experimentId: String(experiment._id),
+                    fcmToken: { $exists: true, $ne: '' },
+                    isProactive: { $ne: true },
+                },
+                { $set: { isProactive: true } },
+            );
+            if (result.modifiedCount > 0) {
+                console.log(`[updateExperiment] set isProactive=true on ${result.modifiedCount} existing user(s) in experiment ${experiment._id}`);
+            }
+        }
+
         res.status(200).send();
     });
 

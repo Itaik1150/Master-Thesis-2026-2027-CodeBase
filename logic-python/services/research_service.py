@@ -146,12 +146,20 @@ class ResearchService:
                 id_variants.append(eid)  # ObjectId form
 
             # Step 2: find users in those experiments who have an FCM token.
-            # Accept any user with a token in a proactive experiment regardless of
-            # the isProactive flag, since new registrations may not have it set.
             proactive_users = list(mongodb_client.db[mongodb_client.users_collection].find({
                 "experimentId": {"$in": id_variants},
                 "fcmToken": {"$exists": True, "$ne": ""},
             }))
+
+            # Self-heal: if proactive was enabled on the experiment AFTER the user
+            # registered, their isProactive flag may still be false. Fix it now.
+            stale_ids = [u["_id"] for u in proactive_users if not u.get("isProactive")]
+            if stale_ids:
+                mongodb_client.db[mongodb_client.users_collection].update_many(
+                    {"_id": {"$in": stale_ids}},
+                    {"$set": {"isProactive": True}},
+                )
+                print(f"🔧 Auto-fixed isProactive=True for {len(stale_ids)} user(s)")
 
             print(f"📊 Found {len(proactive_users)} proactive users with FCM tokens "
                   f"(across {len(enabled_ids)} proactive experiment(s))")
