@@ -1177,89 +1177,36 @@ Beyond the heuristic toggles added in Phase 4.7, add configuration fields to the
 ---
 
 
-### Phase 6 (Deferred) — FCM → Conversation Deep-Link
+### Phase 6 ✅ — FCM → Conversation Deep-Link
 
-> **Deferred to Phase 6.** This is UX polish — the system already works end-to-end and research data is collected correctly without it. The user tapping a notification can navigate to the conversation manually. Implement this before the real experiment launch but after the heuristics in Phase 4 are solid.
-
-This phase makes notification taps land directly in the correct conversation rather than the app's home screen.
+> **Completed May 2026.** Notification taps now land directly in the correct conversation. Session persistence across app launches is also fixed.
 
 ---
 
-#### 6.1 Create conversation in DB before sending FCM
+#### What was built
 
-**Current behavior:** Python sends FCM and injects `firstChatSentence` but no conversation document exists yet — the conversation is only created when the user opens the app and the chat initializes.
+**Python (`logic-python/`):**
+- `research_service.py`: `inject_prompt` runs first (sets `firstChatSentence`), then `_create_conversation()` calls `POST /conversations/create` to pre-create the conversation, then FCM is sent with `{conversationId, experimentId}` in the data payload.
+- `fcm_service.py`: `send_to_token()` accepts an `extra_data: dict` parameter merged into the FCM `data` field.
+- `.env`: `LEXI_SERVER_URL` and `FRONTEND_BASE_URL` added.
 
-**New behavior:** Python creates the conversation first, then sends FCM with the `conversationId`.
+**Android (`android-app/`):**
+- `LexiMessagingService.kt`: extracts `conversationId` + `experimentId` from `message.data`; builds `FRONTEND_BASE_URL/e/:expId/c/:convId`; passes as `deepLinkUrl` intent extra.
+- `MainActivity.kt`: checks `deepLinkUrl` intent extra first (before savedUrl), extracts and caches base experiment URL from it; `onNewIntent` handles taps when app is already running; `setAcceptThirdPartyCookies(webView, true)` enables cross-origin session cookies so participants stay logged in across launches.
+- `build.gradle.kts`: versionCode 5 / versionName 1.4.
 
-Python calls `POST /conversations/create` on the Lexi server before sending FCM:
+**React (`Lexi/client/`):**
+- `ProtectedExperimentRoute.tsx`: appends `?returnTo=<current path>` when redirecting to login.
+- `LoginForm.tsx` + `RegisterForm.tsx`: read `returnTo` query param after successful login/register and navigate to it instead of hardcoded experiment home.
 
-```python
-import requests as http_requests
+**Node.js (`Lexi/server/`):**
+- `usersController.controller.ts`: auth cookie `maxAge` extended from 24 hours to 30 days.
 
-def create_conversation_for_user(self, user_id: str, experiment_id: str) -> str:
-    """Create a conversation in Lexi and return the conversationId"""
-    response = http_requests.post(
-        f"{LEXI_SERVER_URL}/conversations/create",
-        json={"userId": user_id, "experimentId": experiment_id},
-        timeout=10
-    )
-    response.raise_for_status()
-    return response.json()["conversationId"]
-```
+**isProactive flag management (bug fixes):**
+- `experimentsController.controller.ts`: toggling `proactiveSettings.enabled` ON/OFF on an experiment now bulk-updates `isProactive` on all users in that experiment.
+- `research_service.py`: Python cycle self-heals `isProactive=true` for users who have a token and are in a proactive experiment but are missing the field (e.g. registered before proactive was enabled); explicitly `false` users are respected and excluded.
 
----
-
-#### 6.2 Pass conversation context in FCM data payload
-
-**Fix:** Include `experimentId` and `conversationId` in the FCM `data` field alongside the notification:
-
-```python
-# fcm_service.py
-from firebase_admin import messaging
-
-message = messaging.Message(
-    notification=messaging.Notification(title=title, body=body),
-    data={
-        "experimentId": experiment_id,
-        "conversationId": conversation_id,
-        "type": "proactive_nudge"
-    },
-    token=fcm_token
-)
-```
-
----
-
-#### 6.3 Deep-link from notification tap to conversation
-
-**Fix in `LexiMessagingService.kt`:** Extract `conversationId` from `message.data` and build a URL that opens the specific conversation:
-
-```kotlin
-override fun onMessageReceived(message: RemoteMessage) {
-    super.onMessageReceived(message)
-    val title = message.notification?.title ?: message.data["title"] ?: "Lexi"
-    val body = message.notification?.body ?: message.data["body"] ?: "Tap to open chat"
-    val conversationId = message.data["conversationId"]
-    val experimentId = message.data["experimentId"]
-    showNotification(title, body, conversationId, experimentId)
-}
-
-private fun showNotification(title: String, body: String, conversationId: String?, experimentId: String?) {
-    val deepLinkUrl = if (conversationId != null && experimentId != null) {
-        "${BuildConfig.BASE_URL}/e/$experimentId/c/$conversationId"
-    } else {
-        BuildConfig.EXPERIMENT_URL
-    }
-
-    val intent = Intent(this, MainActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        putExtra("deepLinkUrl", deepLinkUrl)
-    }
-    // ... build and show notification
-}
-```
-
-`MainActivity.kt` reads `deepLinkUrl` from the intent extras and passes it to the WebView.
+**Fallback:** if conversation pre-creation fails (limit exceeded, server cold start), FCM is still sent without a `conversationId` — notification tap opens the experiment home screen.
 
 ---
 

@@ -53,7 +53,7 @@ Always consider how changes affect all components.
 - Do NOT change naming conventions
 
 
-Current Phase: Phase 4 — Heuristics Engine & Final UX (June Sprint)
+Current Phase: Phase 6 complete — moving to Phase 7 / Phase 5 dashboard enhancements.
 
 Phase 3 is fully complete:
 - 3.1 ✅ tie isProactive to experiment settings
@@ -64,31 +64,46 @@ Phase 3 is fully complete:
 - 3.4c ✅ persist proactiveMemory to MongoDB
 - 3.4d ✅ memory-aware per-user message generation (personalize_message_for_user)
 
-Phase 4 task order (work top-to-bottom, one task at a time):
-- 4.1 ✅ Deprecate news_service.py — deleted news_service.py + 2 test files; stripped headline methods from research_service.py; renamed original_headline → trigger_source in candidate dicts and proactive_logs
-- 4.2 ✅ Upgrade LLM — gpt-3.5-turbo replaced with gpt-4o default; LLM_PROVIDER + LLM_MODEL env vars added; _call_llm() abstraction routes to OpenAI or Anthropic; all 4 ProactiveLogic methods unified through it
-- 4.3 ✅ Temporal Heuristic — heuristics/temporal.py created; evaluate() checks future_mentions within 6–24h window; mark_fired() stamps fired_temporal_mentions in MongoDB; integrated into coordinated_send_and_inject before topic-pool path
-- 4.4 ✅ Affective Heuristic — heuristics/affective.py created; analyze_conversation_emotion() added to llm_service.py; analyze_and_schedule() reads last finished conversation and stores pending_affective_followup; evaluate() fires if scheduled time has passed; clear_followup() removes it after send; priority: affective → temporal → topic
-- 4.5 ✅ Behavioural Gap Heuristic — heuristics/behavioural_gap.py created; scan_for_gaps() extracts stated_intents via LLM and checks completion after 24–48h; evaluate() fires pending_gap_followup; clear_followup() removes it after send; extract_stated_intents() + check_intent_completion() added to llm_service.py; priority chain: affective → gap → temporal → topic; trigger_source="behavioural_gap"
-- 4.6 ✅ High-intensity Android notifications — lexi_nudges_v2 channel (IMPORTANCE_HIGH); setFullScreenIntent wakes screen over lock; USE_FULL_SCREEN_INTENT permission + showWhenLocked + turnScreenOn in manifest; unique notificationId per nudge; BigTextStyle for long messages; app icon replaces system placeholder
-- 4.7 ✅ Dashboard heuristic toggles + prompt tuning — proactiveSettings extended (heuristics.{temporal,affective,behaviouralGap} + llmModel); ProactiveSettingsModal.tsx updated with checkboxes + model dropdown; heuristics gated in research_service.py per experiment; "Cambridge" → "Ben-Gurion University (BGU)" replaced in all prompts + UI copy
-- 4.8 ✅ Deferred Deep Linking onboarding — one generic APK for all experiments; web landing page GET /join/:experimentId (served by Node.js) with "Download & Join" button; download logs {ip, experimentId, timestamp} to apk_sessions collection; GET /experiments/match-session endpoint matches device IP to recent log (15-min window, FIFO); Android MainActivity calls match-session on first launch, saves experimentId to SharedPreferences; dashboard ProactiveSettingsModal shows web join URL instead of lexi:// deep link; APK_DOWNLOAD_URL env var points to hosted static APK
-- 4.9 💡 Stretch: Google Calendar OAuth for Temporal heuristic; logo refresh; auto-generated documentation
+Phase 4 — fully complete:
+- 4.1 ✅ Deprecate news_service.py
+- 4.2 ✅ Upgrade LLM (gpt-4o default; LLM_PROVIDER + LLM_MODEL env vars; _call_llm() abstraction)
+- 4.3 ✅ Temporal Heuristic (heuristics/temporal.py; future_mentions window 6–24h)
+- 4.4 ✅ Affective Heuristic (heuristics/affective.py; emotion detection; pending_affective_followup)
+- 4.5 ✅ Behavioural Gap Heuristic (heuristics/behavioural_gap.py; stated_intents; 24–48h gap check)
+- 4.6 ✅ High-intensity Android notifications (IMPORTANCE_HIGH; setFullScreenIntent; WakeLock)
+- 4.7 ✅ Dashboard heuristic toggles + prompt tuning (proactiveSettings.heuristics + llmModel; BGU branding)
+- 4.8 ✅ Deferred Deep Linking onboarding (generic APK; /join/:experimentId landing page; IP-based match-session)
+- 4.9 💡 Stretch: Google Calendar OAuth; logo refresh; auto-generated documentation
 
-Key architectural constraints for Phase 4:
+Phase 5 — pending (dashboard enhancements):
+- 5.1 ⬜ Proactive settings UI: schedule picker, notification log table, test-push button
+
+Phase 6 — fully complete (FCM → conversation deep-link):
+- 6.1 ✅ Python pre-creates conversation via POST /conversations/create before sending FCM
+- 6.2 ✅ conversationId + experimentId embedded in FCM data payload (fcm_service.py extra_data)
+- 6.3 ✅ LexiMessagingService.kt extracts deep-link URL from FCM data; passes as intent extra
+- 6.4 ✅ MainActivity handles deepLinkUrl in onCreate (cold tap) and onNewIntent (app running)
+- 6.5 ✅ LoginForm + RegisterForm read ?returnTo= param and redirect to conversation after login
+- 6.6 ✅ WebView third-party cookies enabled (setAcceptThirdPartyCookies) — session persists across launches
+- 6.7 ✅ Auth cookie extended from 24h to 30 days — participants stay logged in throughout experiment
+- 6.8 ✅ isProactive flag bidirectional sync: toggling experiment proactive ON/OFF auto-updates all users
+- 6.9 ✅ Python cycle self-heals isProactive=true for users missing the field; respects explicit false
+
+Key architectural constraints:
 - news_service.py is DEPRECATED. Do not add any new calls to it.
-- The primary LLM will be GPT-4o or Claude 3.5 Sonnet. Do not use gpt-3.5-turbo for new code.
+- The primary LLM is GPT-4o or Claude 3.5 Sonnet. Do not use gpt-3.5-turbo for new code.
 - All proactive_logs entries must include trigger_source ∈ {temporal, affective, gap, topic}.
-- Each heuristic lives in its own module under logic-python/heuristics/. Do not put heuristic logic directly into research_service.py.
-- Heuristics must be gated by experiment.experimentFeatures.proactiveSettings.heuristics[name] (added in 4.7). Until 4.7 is done, treat them as always-enabled.
+- Each heuristic lives in its own module under logic-python/heuristics/.
+- Heuristics are gated by experiment.experimentFeatures.proactiveSettings.heuristics[name].
 - Institution name in ALL system prompts is "Ben-Gurion University (BGU)", not "Cambridge".
-
+- Android APK versionCode is currently 5 / versionName 1.4.
+- Auth cookie maxAge is 30 days (usersController.controller.ts).
 
 Project Context:
 
 See PLAN.md for full system architecture, roadmap, known bugs, and current state.
-Focus on Phase 4 tasks only. Do NOT implement Phase 5 or later unless explicitly asked.
-Do NOT try to implement multiple Phase 4 tasks at once.
+Next work: Phase 5 dashboard enhancements OR Phase 7 quality/analytics.
+Do NOT try to implement multiple tasks at once.
 
 
 If you break any of these rules, stop and explain why.
