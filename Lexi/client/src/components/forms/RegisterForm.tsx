@@ -6,7 +6,7 @@ import { Box, CircularProgress, Container } from '@mui/material';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useDispatch } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Pages } from '@app/App';
 import { getExperimentRegistrationForm } from '../../DAL/server-requests/experiments';
 import useEffectAsync from '../../hooks/useEffectAsync';
@@ -38,6 +38,7 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ experimentId, setSho
     const [form, setForm] = useState(null);
     const dispatch = useDispatch();
     const navigate = useNavigate();
+    const location = useLocation();
     const { openSnackbar } = useSnackbar();
     const [isAgreedTerms, setIsAgreedTerms] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
@@ -120,7 +121,11 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ experimentId, setSho
 
             // Continue with normal flow
             dispatch(setActiveUser(user));
-            navigate(Pages.EXPERIMENT.replace(':experimentId', experimentId));
+            const returnTo = new URLSearchParams(location.search).get('returnTo');
+            const destination = returnTo
+                ? decodeURIComponent(returnTo)
+                : Pages.EXPERIMENT.replace(':experimentId', experimentId);
+            navigate(destination);
             
         } catch (error) {
             console.error('Registration error:', error);

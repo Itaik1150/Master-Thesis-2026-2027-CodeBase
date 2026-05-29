@@ -7,7 +7,7 @@ import { getFormErrorMessage } from '@utils/commonFunctions';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useDispatch } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { FormButton, NoteText } from './CommonFormStyles.s';
 
 const getFCMTokenWithRetry = async (retries = 3, delay = 2000): Promise<string> => {
@@ -42,6 +42,7 @@ interface LoginFormProps {
 
 export const LoginForm: React.FC<LoginFormProps> = ({ isAdminPage, experimentId }) => {
     const navigate = useNavigate();
+    const location = useLocation();
     const dispatch = useDispatch();
     const [isUserAdmin, setIsUserAdmin] = useState(false);
     const {
@@ -81,7 +82,11 @@ export const LoginForm: React.FC<LoginFormProps> = ({ isAdminPage, experimentId 
                     }
                 }
                 
-                navigate(isAdminPage ? Pages.ADMIN : Pages.EXPERIMENT.replace(':experimentId', experimentId));
+                const returnTo = new URLSearchParams(location.search).get('returnTo');
+                const destination = returnTo
+                    ? decodeURIComponent(returnTo)
+                    : isAdminPage ? Pages.ADMIN : Pages.EXPERIMENT.replace(':experimentId', experimentId);
+                navigate(destination);
             }
         } catch (error) {
             console.error(error);
