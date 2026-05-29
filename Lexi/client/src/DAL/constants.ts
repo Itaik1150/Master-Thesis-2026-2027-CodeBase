@@ -47,7 +47,7 @@ export const defaultExperiment = {
     displaySettings: {
         welcomeHeader: 'Welcome',
         welcomeContent:
-            'This is an experiment that is being carried out by Cambridge University.\nHere you will have a therapy session with a chat bot.\nThe conversation is completely anonymous.\nFeel free to share as you like.',
+            'This is an experiment that is being carried out by Ben-Gurion University (BGU).\nHere you will have a therapy session with a chat bot.\nThe conversation is completely anonymous.\nFeel free to share as you like.',
     },
     experimentForms: {
         registration: null,
