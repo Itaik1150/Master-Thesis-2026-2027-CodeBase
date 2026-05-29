@@ -32,7 +32,7 @@ const ProjectOverview: React.FC = () => {
                     fontWeight={400}
                     sx={{ maxWidth: '600px', textAlign: 'center', marginBottom: 4 }}
                 >
-                    Lexi is an innovative platform designed in collaboration with Cambridge University. It serves
+                    Lexi is an innovative platform designed in collaboration with Ben-Gurion University (BGU). It serves
                     as a state-of-the-art environment for conducting extensive research and experiments in the
                     field of user interaction with bots and Language Learning & Agenting Systems (LLMS).
                 </StyledTypography>

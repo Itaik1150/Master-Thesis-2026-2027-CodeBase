@@ -668,6 +668,34 @@ class ResearchService:
             username = user.get('username', 'Unknown')
             fcm_token = user["fcmToken"]
 
+            # ── Load experiment heuristic settings for this user ──────────────
+            # Defaults: all heuristics ON, model = env-configured LLM
+            heuristic_flags = {"temporal": True, "affective": True, "behaviouralGap": True}
+            experiment_llm_model = None  # None → fall back to env LLM_MODEL
+            try:
+                experiment_id = user.get("experimentId")
+                if experiment_id and mongodb_client.connect():
+                    exp_doc = mongodb_client.db["experiments"].find_one(
+                        {"_id": ObjectId(str(experiment_id))},
+                        {"experimentFeatures.proactiveSettings": 1},
+                    )
+                    if exp_doc:
+                        ps = (exp_doc.get("experimentFeatures") or {}).get("proactiveSettings") or {}
+                        if ps.get("heuristics"):
+                            heuristic_flags.update(ps["heuristics"])
+                        if ps.get("llmModel"):
+                            experiment_llm_model = ps["llmModel"]
+            except Exception as e:
+                print(f"⚠️  Could not load experiment settings for {username}: {e}")
+            finally:
+                try:
+                    mongodb_client.disconnect()
+                except Exception:
+                    pass
+
+            if experiment_llm_model:
+                self.llm_service.override_model(experiment_llm_model)
+
             # Build memory:
             #   3.4a — demographics + recent sent topics (no LLM)
             #   3.4b — interests / future_mentions / insight / language (one LLM call)
@@ -716,8 +744,11 @@ class ResearchService:
             #
             # Step 1 (side-effects): run scans that may schedule future nudges.
             # These only write to MongoDB and never fire a message on their own.
-            affective.analyze_and_schedule(user, mongodb_client, self.llm_service)
-            behavioural_gap.scan_for_gaps(user, mongodb_client, self.llm_service)
+            # Each scan is gated by the per-experiment heuristic flags.
+            if heuristic_flags.get("affective", True):
+                affective.analyze_and_schedule(user, mongodb_client, self.llm_service)
+            if heuristic_flags.get("behaviouralGap", True):
+                behavioural_gap.scan_for_gaps(user, mongodb_client, self.llm_service)
 
             # Step 2: reload proactiveMemory from MongoDB before evaluate().
             # The user dict was loaded at the START of the cycle, before save_user_memory
@@ -740,9 +771,10 @@ class ResearchService:
 
             # Step 3: check if any heuristic should fire RIGHT NOW.
             # Evaluate all three before branching so we can log clearly.
-            affective_nudge = affective.evaluate(user)
-            gap_nudge       = behavioural_gap.evaluate(user)
-            temporal_nudge  = temporal.evaluate(user)
+            # Each evaluate is gated by the per-experiment heuristic flags.
+            affective_nudge = affective.evaluate(user)      if heuristic_flags.get("affective", True)      else None
+            gap_nudge       = behavioural_gap.evaluate(user) if heuristic_flags.get("behaviouralGap", True) else None
+            temporal_nudge  = temporal.evaluate(user)       if heuristic_flags.get("temporal", True)       else None
 
             memory_pm = user.get("proactiveMemory") or {}
             print(

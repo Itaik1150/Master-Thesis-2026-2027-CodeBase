@@ -140,7 +140,28 @@ class ProactiveLogic:
                 raise ValueError("OPENAI_API_KEY not found in environment variables")
 
         print(f"🤖 LLM engine: {self.provider.upper()} / {self.model}")
-        
+
+    def override_model(self, model: str):
+        """
+        Temporarily switch the active model for the current proactive cycle.
+        If the model prefix implies a different provider (claude-* → anthropic,
+        gpt-* / o* → openai), the provider is switched as well.
+        Called once per user when the experiment's proactiveSettings.llmModel
+        differs from the env-configured default.
+        """
+        if model == self.model:
+            return  # nothing to do
+
+        if model.startswith("claude"):
+            self.provider = "anthropic"
+            self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        else:
+            self.provider = "openai"
+            self.api_key  = os.getenv("OPENAI_API_KEY", "")
+
+        self.model = model
+        print(f"🔄 LLM overridden by experiment settings: {self.provider.upper()} / {self.model}")
+
     def _call_llm(
         self,
         messages: List[Dict[str, str]],

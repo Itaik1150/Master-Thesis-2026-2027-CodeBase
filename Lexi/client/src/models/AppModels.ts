@@ -118,12 +118,20 @@ export interface ExperimentLeanType {
     title: string;
 }
 
+export interface ProactiveHeuristicsSettings {
+    temporal: boolean;
+    affective: boolean;
+    behaviouralGap: boolean;
+}
+
 export interface ExperimentFeatures {
     userAnnotation: boolean;
     streamMessage: boolean;
     proactiveSettings?: {
         enabled: boolean;
         frequency: number; // in minutes
+        heuristics?: ProactiveHeuristicsSettings;
+        llmModel?: string; // e.g. "gpt-4o" | "claude-3-5-sonnet-20241022"
     };
 }
 

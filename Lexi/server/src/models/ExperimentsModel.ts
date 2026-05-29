@@ -36,7 +36,13 @@ export const experimentsSchema = new Schema<IExperiment>(
             streamMessage: { type: Boolean },
             proactiveSettings: {
                 enabled: { type: Boolean, default: false },
-                frequency: { type: Number, default: 30 }
+                frequency: { type: Number, default: 30 },
+                heuristics: {
+                    temporal:       { type: Boolean, default: true },
+                    affective:      { type: Boolean, default: true },
+                    behaviouralGap: { type: Boolean, default: true },
+                },
+                llmModel: { type: String, default: 'gpt-4o' },
             }
         },
     },
