@@ -138,16 +138,19 @@ class ResearchService:
                 print("📊 No experiments with proactive enabled")
                 return []
 
-            # Step 2: find users in those experiments who have isProactive + fcmToken.
-            # Also include users where isProactive is not set but their experiment
-            # has proactive enabled and they have an FCM token — covers new registrations.
+            # experimentId may be stored as a string or as an ObjectId depending on
+            # how the client saved it — include both forms to be safe.
+            id_variants = []
+            for eid in enabled_ids:
+                id_variants.append(str(eid))
+                id_variants.append(eid)  # ObjectId form
+
+            # Step 2: find users in those experiments who have an FCM token.
+            # Accept any user with a token in a proactive experiment regardless of
+            # the isProactive flag, since new registrations may not have it set.
             proactive_users = list(mongodb_client.db[mongodb_client.users_collection].find({
-                "experimentId": {"$in": [str(eid) for eid in enabled_ids]},
+                "experimentId": {"$in": id_variants},
                 "fcmToken": {"$exists": True, "$ne": ""},
-                "$or": [
-                    {"isProactive": True},
-                    {"isProactive": {"$exists": False}},
-                ]
             }))
 
             print(f"📊 Found {len(proactive_users)} proactive users with FCM tokens "
