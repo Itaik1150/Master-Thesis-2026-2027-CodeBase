@@ -145,21 +145,28 @@ class ResearchService:
                 id_variants.append(str(eid))
                 id_variants.append(eid)  # ObjectId form
 
-            # Step 2: find users in those experiments who have an FCM token.
+            # Step 2: find users in those experiments with a token where the
+            # isProactive field was never set (field missing entirely).
+            # These are users who registered before proactive was enabled on
+            # the experiment — heal them first, then query the proper set.
+            unset_result = mongodb_client.db[mongodb_client.users_collection].update_many(
+                {
+                    "experimentId": {"$in": id_variants},
+                    "fcmToken": {"$exists": True, "$ne": ""},
+                    "isProactive": {"$exists": False},
+                },
+                {"$set": {"isProactive": True}},
+            )
+            if unset_result.modified_count > 0:
+                print(f"🔧 Auto-set isProactive=True for {unset_result.modified_count} user(s) missing the field")
+
+            # Step 3: fetch only users who are explicitly marked proactive=true.
+            # Users set to false (e.g. via dashboard toggle) are excluded.
             proactive_users = list(mongodb_client.db[mongodb_client.users_collection].find({
                 "experimentId": {"$in": id_variants},
                 "fcmToken": {"$exists": True, "$ne": ""},
+                "isProactive": True,
             }))
-
-            # Self-heal: if proactive was enabled on the experiment AFTER the user
-            # registered, their isProactive flag may still be false. Fix it now.
-            stale_ids = [u["_id"] for u in proactive_users if not u.get("isProactive")]
-            if stale_ids:
-                mongodb_client.db[mongodb_client.users_collection].update_many(
-                    {"_id": {"$in": stale_ids}},
-                    {"$set": {"isProactive": True}},
-                )
-                print(f"🔧 Auto-fixed isProactive=True for {len(stale_ids)} user(s)")
 
             print(f"📊 Found {len(proactive_users)} proactive users with FCM tokens "
                   f"(across {len(enabled_ids)} proactive experiment(s))")
