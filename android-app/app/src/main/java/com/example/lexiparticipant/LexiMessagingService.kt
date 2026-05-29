@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -29,7 +30,26 @@ class LexiMessagingService : FirebaseMessagingService() {
         showNotification(title, body)
     }
 
+    private fun wakeScreen() {
+        // Briefly acquire a wake lock to power the screen on before posting the
+        // notification. This is the most reliable cross-version approach — it works
+        // on Android 8–14+ without requiring a manual user grant in Settings.
+        // ACQUIRE_CAUSES_WAKEUP is what actually turns the display on.
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        @Suppress("DEPRECATION")
+        val wakeLock = powerManager.newWakeLock(
+            PowerManager.FULL_WAKE_LOCK or
+            PowerManager.ACQUIRE_CAUSES_WAKEUP or
+            PowerManager.ON_AFTER_RELEASE,
+            "lexi:nudge_wake"
+        )
+        wakeLock.acquire(5_000L)   // hold for 5 s — enough to read the heads-up banner
+        wakeLock.release()
+    }
+
     private fun showNotification(title: String, body: String) {
+        wakeScreen()
+
         // lexi_nudges_v2: IMPORTANCE_HIGH channel.
         // A new channel ID is required because Android locks in a channel's
         // importance once created — the old lexi_nudges (IMPORTANCE_DEFAULT)

@@ -4,8 +4,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Required for setFullScreenIntent to wake the screen on Android 14+ (API 34+) -->
+    <!-- Required for setFullScreenIntent on Android 14+ (must also be granted manually in Settings) -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Allows the service to briefly wake the screen when a nudge arrives -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
 
 
