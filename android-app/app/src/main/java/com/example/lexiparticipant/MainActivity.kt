@@ -90,30 +90,37 @@ class MainActivity : ComponentActivity() {
 
     // Calls GET /experiments/match-session on the server.
     // Returns the full WebView URL if a match is found, null otherwise.
+    // Retries once to handle Render's ~40s cold-start on the free tier.
     private fun tryMatchSession(): String? {
-        return try {
-            val url = URL("${BuildConfig.SERVER_URL}/experiments/match-session")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.connectTimeout = 8_000
-            conn.readTimeout   = 8_000
-            conn.setRequestProperty("Accept", "application/json")
+        repeat(2) { attempt ->
+            try {
+                val url = URL("${BuildConfig.SERVER_URL}/experiments/match-session")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "GET"
+                // 45s covers Render's worst-case cold start (~40s).
+                conn.connectTimeout = 45_000
+                conn.readTimeout   = 45_000
+                conn.setRequestProperty("Accept", "application/json")
 
-            if (conn.responseCode == 200) {
-                val body = conn.inputStream.bufferedReader().readText()
-                val json = JSONObject(body)
-                val experimentId = json.optString("experimentId", "")
-                if (experimentId.isNotEmpty()) {
-                    "${BuildConfig.FRONTEND_BASE_URL}/e/$experimentId"
-                } else null
-            } else {
-                android.util.Log.w("Lexi", "match-session returned ${conn.responseCode}")
-                null
+                val code = conn.responseCode
+                if (code == 200) {
+                    val body = conn.inputStream.bufferedReader().readText()
+                    val json = JSONObject(body)
+                    val experimentId = json.optString("experimentId", "")
+                    if (experimentId.isNotEmpty()) {
+                        return "${BuildConfig.FRONTEND_BASE_URL}/e/$experimentId"
+                    }
+                    // Server responded but no match found — don't retry.
+                    android.util.Log.w("Lexi", "match-session: no match (attempt ${attempt + 1})")
+                    return null
+                } else {
+                    android.util.Log.w("Lexi", "match-session HTTP $code (attempt ${attempt + 1})")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("Lexi", "match-session failed (attempt ${attempt + 1}): ${e.message}")
             }
-        } catch (e: Exception) {
-            android.util.Log.e("Lexi", "match-session failed: ${e.message}")
-            null
         }
+        return null
     }
 }
 
@@ -131,6 +138,11 @@ private fun MatchingScreen() {
             Text(
                 text = "Connecting to experiment…",
                 style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "This may take up to 30 seconds on first launch.",
+                style = MaterialTheme.typography.bodySmall,
             )
         }
     }
