@@ -7,12 +7,16 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from bson import ObjectId
+import requests as http_requests
 
 MAX_DAILY_NOTIFICATIONS = 9999     # TEMP for testing 3.4d — revert to 3 before pilot
 MAX_CANDIDATES = 6                 # max pool size per cycle (news + topic fill)
 MEMORY_TOPICS_LIMIT = 5            # how many recent sent topics to remember per user (for memory display)
 BLOCK_LAST_N_TOPICS = 1            # don't repeat this many most-recent topics back-to-back
 MEMORY_CONVERSATIONS_LIMIT = 10    # how many past conversations to read per user (3.4b)
+
+LEXI_SERVER_URL  = os.getenv("LEXI_SERVER_URL", "https://lexi-server-1rx9.onrender.com")
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "https://master-thesis-2026-2027-code-base.vercel.app")
 
 from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
@@ -682,6 +686,34 @@ class ResearchService:
         finally:
             mongodb_client.disconnect()
 
+    def _create_conversation(self, user_id: str, experiment_id: str, num_conversations: int) -> Optional[str]:
+        """
+        Pre-creates a conversation on the Lexi server so we can send its ID
+        in the FCM data payload for deep-linking.
+        Returns the conversationId string, or None on any failure.
+        Must be called AFTER inject_prompt so firstChatSentence is already set.
+        """
+        try:
+            resp = http_requests.post(
+                f"{LEXI_SERVER_URL}/conversations/create",
+                json={
+                    "userId": user_id,
+                    "experimentId": experiment_id,
+                    "numberOfConversations": num_conversations,
+                },
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                conversation_id = resp.text.strip().strip('"')
+                return conversation_id
+            elif resp.status_code == 403:
+                print(f"⚠️  Conversation limit reached for user {user_id} — skipping pre-create")
+            else:
+                print(f"⚠️  /conversations/create returned {resp.status_code}: {resp.text[:100]}")
+        except Exception as e:
+            print(f"⚠️  _create_conversation failed for user {user_id}: {e}")
+        return None
+
     def coordinated_send_and_inject(self, candidates: List[Dict], users: List[Dict], cycle_id: str) -> Dict:
         """
         For each eligible user, pick the best candidate from the pool,
@@ -898,47 +930,67 @@ class ResearchService:
                 print(f"   ↪ original was: {message.get('original_message', '')}")
 
             try:
-                # Step 1: Send FCM notification
                 from core.models import UserContext
+
+                # Step 1: Set firstChatSentence on the user doc so the server
+                # picks it up as the first message when it creates the conversation.
+                injection_result = self.inject_prompt(user_id, message["generated_message"])
+                if injection_result:
+                    results["injected"] += 1
+                    print(f"💬 Message injected for {username}")
+                else:
+                    results["injection_failed"] += 1
+                    print(f"⚠️  inject_prompt failed for {username} — will still send FCM")
+
+                # Step 2: Pre-create the conversation so we have a conversationId
+                # to embed in the FCM data for direct deep-linking.
+                experiment_id_str = str(user.get("experimentId", ""))
+                num_convs = int(user.get("numberOfConversations", 0))
+                conversation_id = self._create_conversation(user_id, experiment_id_str, num_convs)
+                if conversation_id:
+                    print(f"📝 Pre-created conversation {conversation_id} for {username}")
+                else:
+                    print(f"⚠️  Could not pre-create conversation for {username} — FCM will open home screen")
+
+                # Step 3: Send FCM.  Include conversationId + experimentId so the
+                # Android app can deep-link directly into the conversation.
+                fcm_extra = {}
+                if conversation_id and experiment_id_str:
+                    fcm_extra = {
+                        "conversationId": conversation_id,
+                        "experimentId": experiment_id_str,
+                    }
+
                 notification_result = self.fcm_service.send_to_user(
                     user=UserContext(
                         user_id=user_id,
                         name=username,
-                        fcm_token=fcm_token
+                        fcm_token=fcm_token,
                     ),
                     body=message["generated_message"],
-                    title="Lexi"
+                    title="Lexi",
+                    extra_data=fcm_extra if fcm_extra else None,
                 )
 
                 if notification_result:
                     results["fcm_sent"] += 1
                     print(f"✅ FCM sent to {username}")
 
-                    # Step 2: Inject message only after successful FCM
-                    injection_result = self.inject_prompt(user_id, message["generated_message"])
+                    # Step 4: heuristic post-send cleanup
+                    if affective_nudge:
+                        affective.clear_followup(user_id, mongodb_client)
+                    elif gap_nudge:
+                        behavioural_gap.clear_followup(user_id, mongodb_client)
+                    elif temporal_nudge:
+                        temporal.mark_fired(
+                            user_id,
+                            temporal_nudge.mention_text,
+                            temporal_nudge.when_iso,
+                            mongodb_client,
+                        )
 
-                    if injection_result:
-                        results["injected"] += 1
-                        print(f"💬 Message injected for {username}")
-
-                        # Step 3: heuristic post-send cleanup
-                        if affective_nudge:
-                            affective.clear_followup(user_id, mongodb_client)
-                        elif gap_nudge:
-                            behavioural_gap.clear_followup(user_id, mongodb_client)
-                        elif temporal_nudge:
-                            temporal.mark_fired(
-                                user_id,
-                                temporal_nudge.mention_text,
-                                temporal_nudge.when_iso,
-                                mongodb_client,
-                            )
-
-                        # Step 4: Log success (reconnect — inject_prompt closed the client)
-                        self.log_proactive_event(cycle_id, user_id, message, "sent", notification_result)
-                    else:
-                        results["injection_failed"] += 1
-                        print(f"❌ Injection failed for {username}")
+                    # Step 5: Log success
+                    self.log_proactive_event(cycle_id, user_id, message, "sent", notification_result)
                 else:
                     results["fcm_failed"] += 1
                     print(f"❌ FCM failed for {username}")

@@ -24,10 +24,20 @@ class LexiMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
 
-        val title = message.notification?.title ?: message.data["title"] ?: "Lexi"
-        val body  = message.notification?.body  ?: message.data["body"]  ?: "Tap to open chat"
+        val title          = message.notification?.title ?: message.data["title"] ?: "Lexi"
+        val body           = message.notification?.body  ?: message.data["body"]  ?: "Tap to open chat"
+        val conversationId = message.data["conversationId"]
+        val experimentId   = message.data["experimentId"]
 
-        showNotification(title, body)
+        // Build a direct deep-link URL when both IDs are present so the
+        // notification tap lands in the exact conversation rather than home.
+        val deepLinkUrl: String? = if (!conversationId.isNullOrEmpty() && !experimentId.isNullOrEmpty()) {
+            "${BuildConfig.FRONTEND_BASE_URL}/e/$experimentId/c/$conversationId"
+        } else {
+            null  // fallback: MainActivity will load the cached experiment URL
+        }
+
+        showNotification(title, body, deepLinkUrl)
     }
 
     private fun wakeScreen() {
@@ -47,7 +57,7 @@ class LexiMessagingService : FirebaseMessagingService() {
         wakeLock.release()
     }
 
-    private fun showNotification(title: String, body: String) {
+    private fun showNotification(title: String, body: String, deepLinkUrl: String? = null) {
         wakeScreen()
 
         // lexi_nudges_v2: IMPORTANCE_HIGH channel.
@@ -58,6 +68,9 @@ class LexiMessagingService : FirebaseMessagingService() {
 
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            if (deepLinkUrl != null) {
+                putExtra("deepLinkUrl", deepLinkUrl)
+            }
         }
 
         // Use a unique request code per nudge so each PendingIntent is distinct

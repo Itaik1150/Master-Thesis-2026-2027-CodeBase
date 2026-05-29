@@ -2,6 +2,7 @@ package com.example.lexiparticipant
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
 import android.os.Bundle
@@ -37,6 +38,18 @@ class MainActivity : ComponentActivity() {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
 
+    // Held so onNewIntent can navigate without recreating the composable tree.
+    private var activeWebView: WebView? = null
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val deepLinkUrl = intent.getStringExtra("deepLinkUrl")
+        if (!deepLinkUrl.isNullOrEmpty()) {
+            android.util.Log.d("Lexi", "onNewIntent: navigating to $deepLinkUrl")
+            activeWebView?.loadUrl(deepLinkUrl)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -55,11 +68,16 @@ class MainActivity : ComponentActivity() {
                 .apply()
         }
 
+        // If this launch came from a notification tap, load that conversation directly.
+        // We still have the experiment URL cached for when the user navigates back home.
+        val deepLinkUrl = intent?.getStringExtra("deepLinkUrl")
+
         val savedUrl = prefs.getString(KEY_EXPERIMENT_URL, null)
 
         if (savedUrl != null) {
-            // Already matched on a previous launch — load directly.
-            setContent { MaterialTheme { ChatScreen(url = savedUrl) } }
+            // Already matched — load the experiment home (or deep link if present).
+            val initialUrl = deepLinkUrl ?: savedUrl
+            setContent { MaterialTheme { ChatScreen(url = initialUrl, onWebViewCreated = { activeWebView = it }) } }
         } else {
             // First launch: show a loading screen while we attempt to match this
             // device's IP to a recent APK download session on the server.
@@ -70,7 +88,7 @@ class MainActivity : ComponentActivity() {
                 withContext(Dispatchers.Main) {
                     if (experimentUrl != null) {
                         prefs.edit().putString(KEY_EXPERIMENT_URL, experimentUrl).apply()
-                        setContent { MaterialTheme { ChatScreen(url = experimentUrl) } }
+                        setContent { MaterialTheme { ChatScreen(url = experimentUrl, onWebViewCreated = { activeWebView = it }) } }
                     } else {
                         // No automatic match — fall back to the manual setup screen
                         // so the researcher / participant can paste the URL directly.
@@ -78,7 +96,7 @@ class MainActivity : ComponentActivity() {
                             MaterialTheme {
                                 SetupScreen(onContinue = { url ->
                                     prefs.edit().putString(KEY_EXPERIMENT_URL, url).apply()
-                                    setContent { MaterialTheme { ChatScreen(url = url) } }
+                                    setContent { MaterialTheme { ChatScreen(url = url, onWebViewCreated = { activeWebView = it }) } }
                                 })
                             }
                         }
@@ -235,7 +253,7 @@ private fun verifyExperimentExists(experimentId: String): Boolean {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun ChatScreen(url: String) {
+private fun ChatScreen(url: String, onWebViewCreated: ((WebView) -> Unit)? = null) {
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -267,7 +285,7 @@ private fun ChatScreen(url: String) {
                     addJavascriptInterface(AndroidBridge(context), "Android")
                     android.util.Log.d("Lexi", "Loading URL: $url")
                     loadUrl(url)
-                }
+                }.also { onWebViewCreated?.invoke(it) }
             },
         )
     }

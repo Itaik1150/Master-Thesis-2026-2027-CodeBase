@@ -51,14 +51,14 @@ class FCMService:
         else:
             print(f"✅ Firebase already initialized")
 
-    def send_to_user(self, user: UserContext, body: str, title: Optional[str] = None) -> Optional[str]:
+    def send_to_user(self, user: UserContext, body: str, title: Optional[str] = None, extra_data: Optional[dict] = None) -> Optional[str]:
         """
         Convenience: send notification using user.fcm_token
         Returns message id string (or None if dry_run).
         """
-        return self.send_to_token(token=user.fcm_token, body=body, title=title)
+        return self.send_to_token(token=user.fcm_token, body=body, title=title, extra_data=extra_data)
 
-    def send_to_token(self, token: str, body: str, title: Optional[str] = None) -> Optional[str]:
+    def send_to_token(self, token: str, body: str, title: Optional[str] = None, extra_data: Optional[dict] = None) -> Optional[str]:
         """
         Sends a push notification to a specific FCM token.
         Returns message id string (or None if dry_run).
@@ -78,10 +78,15 @@ class FCMService:
             return None
 
         try:
+            data_payload = {"click_action": "FLUTTER_NOTIFICATION_CLICK"}
+            if extra_data:
+                # All FCM data values must be strings.
+                data_payload.update({k: str(v) for k, v in extra_data.items()})
+
             msg = messaging.Message(
                 notification=messaging.Notification(title=final_title, body=body),
                 token=token,
-                data={"click_action": "FLUTTER_NOTIFICATION_CLICK"},
+                data=data_payload,
             )
             resp = messaging.send(msg)
             print(f"🚀 FCM Service: Sent! ID: {resp}")
