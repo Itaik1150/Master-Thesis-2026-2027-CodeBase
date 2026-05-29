@@ -109,29 +109,43 @@ class ExperimentsController {
     });
 
     // Called by the Android app on first launch.
-    // Matches the device IP to the most recent unmatched apk_session within 15 minutes
+    // Matches the device IP to the most recent unmatched apk_session within 60 minutes
     // and returns the associated experimentId so the app can lock itself in.
     matchSession = requestHandler(async (req: Request, res: Response) => {
         const ip = getClientIp(req);
-        const windowStart = new Date(Date.now() - 60 * 60 * 1000); // 60-min window
+        const windowStart = new Date(Date.now() - 60 * 60 * 1000);
+
+        console.log(`[match-session] incoming IP: "${ip}"`);
 
         const db = mongoose.connection.db;
-        const session = await db.collection('apk_sessions').findOneAndUpdate(
-            {
-                ip,
-                timestamp: { $gte: windowStart },
-                matched: false,
-            },
-            { $set: { matched: true, matchedAt: new Date() } },
-            { sort: { timestamp: -1 }, returnDocument: 'after' },
+
+        // Use explicit findOne + updateOne instead of findOneAndUpdate to avoid
+        // driver-version differences in return shape.
+        const session = await db.collection('apk_sessions').findOne(
+            { ip, timestamp: { $gte: windowStart }, matched: false },
+            { sort: { timestamp: -1 } },
         );
 
+        console.log(`[match-session] found session: ${session ? JSON.stringify(session) : 'none'}`);
+
         if (!session) {
+            // Also log all recent sessions for this IP to help debug mismatches.
+            const recent = await db.collection('apk_sessions')
+                .find({ timestamp: { $gte: windowStart } })
+                .sort({ timestamp: -1 })
+                .limit(5)
+                .toArray();
+            console.log(`[match-session] recent sessions (last 5): ${JSON.stringify(recent.map(s => ({ ip: s.ip, expId: s.experimentId, matched: s.matched })))}`);
             res.status(404).json({ experimentId: null });
             return;
         }
 
-        res.status(200).json({ experimentId: (session as any).experimentId });
+        await db.collection('apk_sessions').updateOne(
+            { _id: session._id },
+            { $set: { matched: true, matchedAt: new Date() } },
+        );
+
+        res.status(200).json({ experimentId: session.experimentId });
     });
 }
 

@@ -108,8 +108,8 @@ class JoinController {
                 timestamp: new Date(),
                 matched: false,
             });
+            console.log(`[join/download] logged session — ip: "${ip}", experimentId: "${experimentId}"`);
         } catch (err) {
-            // Log the error but do NOT block the download — participant UX is priority.
             console.error('[join] Failed to log apk_session:', err);
         }
 

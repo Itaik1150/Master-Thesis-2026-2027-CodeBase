@@ -149,10 +149,12 @@ private fun MatchingScreen() {
 }
 
 // Fallback: participant can paste a URL manually.
+// Validates that the URL contains a known experiment before accepting it.
 @Composable
 private fun SetupScreen(onContinue: (String) -> Unit) {
-    var input by remember { mutableStateOf(TextFieldValue("")) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var input    by remember { mutableStateOf(TextFieldValue("")) }
+    var error    by remember { mutableStateOf<String?>(null) }
+    var checking by remember { mutableStateOf(false) }
 
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -170,10 +172,11 @@ private fun SetupScreen(onContinue: (String) -> Unit) {
             Spacer(modifier = Modifier.height(12.dp))
             OutlinedTextField(
                 value = input,
-                onValueChange = { input = it },
+                onValueChange = { input = it; error = null },
                 label = { Text("Participant URL") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                isError = error != null,
             )
             if (error != null) {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -187,14 +190,46 @@ private fun SetupScreen(onContinue: (String) -> Unit) {
                     if (!url.startsWith("http://") && !url.startsWith("https://")) {
                         error = "URL must start with http:// or https://"; return@Button
                     }
+                    // Extract experiment ID — expected format: .../e/<24-char-hex-id>
+                    val experimentId = Regex("/e/([a-fA-F0-9]{24})").find(url)?.groupValues?.get(1)
+                    if (experimentId == null) {
+                        error = "Invalid link — experiment ID not found in URL."; return@Button
+                    }
+                    checking = true
                     error = null
-                    onContinue(url)
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val exists = verifyExperimentExists(experimentId)
+                        withContext(Dispatchers.Main) {
+                            checking = false
+                            if (exists) {
+                                onContinue(url)
+                            } else {
+                                error = "Experiment not found. Please check the link."
+                            }
+                        }
+                    }
                 },
                 modifier = Modifier.fillMaxWidth(),
+                enabled = !checking,
             ) {
-                Text("Continue")
+                Text(if (checking) "Checking…" else "Continue")
             }
         }
+    }
+}
+
+// Calls GET /experiments/:id to verify the experiment exists in the database.
+private fun verifyExperimentExists(experimentId: String): Boolean {
+    return try {
+        val url  = URL("${BuildConfig.SERVER_URL}/experiments/$experimentId")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod  = "GET"
+        conn.connectTimeout = 10_000
+        conn.readTimeout    = 10_000
+        conn.responseCode == 200
+    } catch (e: Exception) {
+        android.util.Log.e("Lexi", "verifyExperiment failed: ${e.message}")
+        false
     }
 }
 
