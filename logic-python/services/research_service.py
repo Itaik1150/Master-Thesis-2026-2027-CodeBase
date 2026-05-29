@@ -119,25 +119,41 @@ class ResearchService:
     
     def get_all_proactive_users(self):
         """
-        Get all proactive users with FCM tokens
-        
-        Returns:
-            List of proactive users with FCM tokens
+        Get all proactive users with FCM tokens whose experiment has proactive enabled.
+        Joins users → experiments to filter out experiments where proactive is disabled.
         """
         try:
             if not mongodb_client.connect():
                 print("❌ Failed to connect to MongoDB")
                 return []
-            
-            # Find all users with isProactive: true and fcmToken exists
+
+            # Step 1: find all experiment IDs that have proactiveSettings.enabled = true
+            enabled_experiments = list(mongodb_client.db["experiments"].find(
+                {"experimentFeatures.proactiveSettings.enabled": True},
+                {"_id": 1}
+            ))
+            enabled_ids = [exp["_id"] for exp in enabled_experiments]
+
+            if not enabled_ids:
+                print("📊 No experiments with proactive enabled")
+                return []
+
+            # Step 2: find users in those experiments who have isProactive + fcmToken.
+            # Also include users where isProactive is not set but their experiment
+            # has proactive enabled and they have an FCM token — covers new registrations.
             proactive_users = list(mongodb_client.db[mongodb_client.users_collection].find({
-                "isProactive": True,
-                "fcmToken": {"$exists": True, "$ne": ""}
+                "experimentId": {"$in": [str(eid) for eid in enabled_ids]},
+                "fcmToken": {"$exists": True, "$ne": ""},
+                "$or": [
+                    {"isProactive": True},
+                    {"isProactive": {"$exists": False}},
+                ]
             }))
-            
-            print(f"📊 Found {len(proactive_users)} proactive users with FCM tokens")
+
+            print(f"📊 Found {len(proactive_users)} proactive users with FCM tokens "
+                  f"(across {len(enabled_ids)} proactive experiment(s))")
             return proactive_users
-            
+
         except Exception as e:
             print(f"❌ Error fetching proactive users: {e}")
             return []
@@ -914,8 +930,13 @@ class ResearchService:
                 error_msg = str(e)
                 print(f"❌ Error processing user {username}: {e}")
 
-                # Auto-cleanup: stale token (app reinstalled / cache cleared)
-                if "not found" in error_msg.lower() or "registration-token-not-registered" in error_msg.lower():
+                # Auto-cleanup: stale token (app reinstalled / cache cleared).
+                # FCM returns several error strings for invalid tokens:
+                stale_signals = ("notregistered", "not registered", "not found",
+                                 "registration-token-not-registered",
+                                 "invalid-registration-token",
+                                 "invalid registration token")
+                if any(s in error_msg.lower() for s in stale_signals):
                     print(f"🗑️  Stale token detected for {username} — removing from DB")
                     self.clear_stale_fcm_token(user_id, username)
 
