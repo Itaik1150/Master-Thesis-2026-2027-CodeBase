@@ -7,7 +7,7 @@ const cookieConfig: CookieOptions = {
     httpOnly: true,
     sameSite: isProduction ? 'none' : 'lax',
     secure: isProduction,
-    maxAge: 24 * 60 * 60 * 1000,
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days — participants should stay logged in throughout the experiment
 };
 
 class UsersController {
