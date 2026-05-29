@@ -1,14 +1,18 @@
 import { Pages } from '@app/App';
 import useActiveUser from '@hooks/useActiveUser';
 import { Box } from '@mui/system';
-import { Navigate, Outlet, useParams } from 'react-router-dom';
+import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom';
 
 const PrivateExperimentRoute = ({ TopBar, setIsOpen }) => {
     const { activeUser } = useActiveUser();
     const { experimentId } = useParams();
+    const location = useLocation();
 
     if (!activeUser) {
-        return <Navigate to={`${Pages.EXPERIMENT_LOGIN.replace(':experimentId', experimentId)}`} replace />;
+        const loginPath = Pages.EXPERIMENT_LOGIN.replace(':experimentId', experimentId);
+        // Preserve the full path (e.g. /e/:id/c/:convId) so login can redirect back.
+        const returnTo = encodeURIComponent(location.pathname);
+        return <Navigate to={`${loginPath}?returnTo=${returnTo}`} replace />;
     }
 
     return (
