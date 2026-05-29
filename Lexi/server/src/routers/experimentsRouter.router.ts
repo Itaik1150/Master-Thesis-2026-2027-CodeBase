@@ -5,6 +5,7 @@ export const experimentsRouter = () => {
     const router = Router();
     router.get('/', experimentsController.getExperiments);
     router.get('/agent', experimentsController.getAllExperimentsByAgentId);
+    router.get('/match-session', experimentsController.matchSession);
     router.get('/:id', experimentsController.getExperiment);
     router.get('/:id/features', experimentsController.getExperimentFeatures);
     router.get('/:id/content', experimentsController.getExperimentContent);

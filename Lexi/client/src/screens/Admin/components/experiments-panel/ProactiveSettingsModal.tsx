@@ -54,7 +54,8 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     const [frequency, setFrequency] = useState(30);
     const [heuristics, setHeuristics] = useState<ProactiveHeuristicsSettings>(DEFAULT_HEURISTICS);
     const [llmModel, setLlmModel] = useState('gpt-4o');
-    const [deepLink, setDeepLink] = useState(`lexi://join/${experiment._id}`);
+    const serverBase = process.env.REACT_APP_API_URL || 'https://lexi-server-1rx9.onrender.com';
+    const [deepLink, setDeepLink] = useState(`${serverBase}/join/${experiment._id}`);
     const [isLoading, setIsLoading] = useState(false);
     const { openSnackbar } = useSnackbar();
 
@@ -254,10 +255,10 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                     {proactiveEnabled && (
                         <Box>
                             <Typography variant="h6" gutterBottom>
-                                App Distribution
+                                Participant Join Link
                             </Typography>
                             <Typography variant="body2" color="textSecondary" gutterBottom>
-                                Share this link with participants. When clicked on an Android device with Lexi installed, it will automatically connect them to this experiment.
+                                Share this link with participants. Opening it on their Android device will download the Lexi app and automatically connect them to this experiment — no manual configuration needed.
                             </Typography>
                             <TextField
                                 fullWidth

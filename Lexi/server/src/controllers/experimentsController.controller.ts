@@ -1,9 +1,20 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import { conversationsService } from '../services/conversations.service';
 import { experimentsService } from '../services/experiments.service';
 import { formsService } from '../services/forms.service';
 import { usersService } from '../services/users.service';
 import { requestHandler } from '../utils/requestHandler';
+
+const getClientIp = (req: Request): string => {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) {
+        return (Array.isArray(forwarded) ? forwarded[0] : forwarded)
+            .split(',')[0]
+            .trim();
+    }
+    return req.socket?.remoteAddress || req.ip || 'unknown';
+};
 
 class ExperimentsController {
     getExperiments = requestHandler(async (req: Request, res: Response) => {
@@ -93,6 +104,32 @@ class ExperimentsController {
         ]);
 
         res.status(200).send();
+    });
+
+    // Called by the Android app on first launch.
+    // Matches the device IP to the most recent unmatched apk_session within 15 minutes
+    // and returns the associated experimentId so the app can lock itself in.
+    matchSession = requestHandler(async (req: Request, res: Response) => {
+        const ip = getClientIp(req);
+        const windowStart = new Date(Date.now() - 15 * 60 * 1000);
+
+        const db = mongoose.connection.db;
+        const session = await db.collection('apk_sessions').findOneAndUpdate(
+            {
+                ip,
+                timestamp: { $gte: windowStart },
+                matched: false,
+            },
+            { $set: { matched: true, matchedAt: new Date() } },
+            { sort: { timestamp: -1 }, returnDocument: 'after' },
+        );
+
+        if (!session) {
+            res.status(404).json({ experimentId: null });
+            return;
+        }
+
+        res.status(200).json({ experimentId: (session as any).experimentId });
     });
 }
 

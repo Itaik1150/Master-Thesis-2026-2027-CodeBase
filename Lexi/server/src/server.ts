@@ -9,6 +9,7 @@ import { conversationsRouter } from './routers/conversationsRouter.router';
 import { dataAggregationRouter } from './routers/dataAggregationRouter.router';
 import { experimentsRouter } from './routers/experimentsRouter.router';
 import { formsRouter } from './routers/formsRouter';
+import { joinRouter } from './routers/joinRouter';
 import { usersRouter } from './routers/usersRouter.router';
 import { usersService } from './services/users.service';
 
@@ -36,6 +37,8 @@ const createAdminUser = (username: string, password: string) => {
 
 const setupServer = () => {
     const app = express();
+    // Trust Render's reverse proxy so req.ip / x-forwarded-for returns the real client IP.
+    app.set('trust proxy', true);
     app.use(bodyParser.json());
     const corsOptions = {
         origin: (origin, callback) => {
@@ -64,6 +67,8 @@ const setupServer = () => {
 
     const PORT = Number(process.env.PORT) || 5000;
     app.use('/health', (req, res) => res.status(200).send('OK'));
+    // /join serves the participant landing page — no auth, no CORS restriction needed.
+    app.use('/join', joinRouter());
     app.use('/conversations', conversationsRouter());
     app.use('/experiments', experimentsRouter());
     app.use('/users', usersRouter());

@@ -22,12 +22,13 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // PRODUCTION (any network — Vercel)
-        buildConfigField("String", "EXPERIMENT_URL", "\"https://master-thesis-2026-2027-code-base.vercel.app/e/69e397f15daf7d1e1d399827\"")
-        // LOCAL WiFi: swap to this line for local dev (comment out the one above)
-        // buildConfigField("String", "EXPERIMENT_URL", "\"http://192.168.31.200:3000/e/69e397f15daf7d1e1d399827\"")
-        // EMULATOR: swap to this line for emulator dev
-        // buildConfigField("String", "EXPERIMENT_URL", "\"http://10.0.2.2:3000/e/69e397f15daf7d1e1d399827\"")
+        // Backend server URL — used for match-session call on first launch.
+        buildConfigField("String", "SERVER_URL", "\"https://lexi-server-1rx9.onrender.com\"")
+        // Frontend base URL — experiment WebView loads <FRONTEND_BASE_URL>/e/<experimentId>
+        buildConfigField("String", "FRONTEND_BASE_URL", "\"https://master-thesis-2026-2027-code-base.vercel.app\"")
+        // LOCAL dev overrides (swap comments as needed):
+        // buildConfigField("String", "SERVER_URL", "\"http://192.168.31.200:5000\"")
+        // buildConfigField("String", "FRONTEND_BASE_URL", "\"http://192.168.31.200:3000\"")
     }
 
     buildTypes {
