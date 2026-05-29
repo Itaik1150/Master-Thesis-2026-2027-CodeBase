@@ -27,8 +27,9 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-private const val PREFS_NAME      = "lexi_prefs"
+private const val PREFS_NAME         = "lexi_prefs"
 private const val KEY_EXPERIMENT_URL = "experiment_url"
+private const val KEY_VERSION_CODE   = "version_code"
 
 class MainActivity : ComponentActivity() {
 
@@ -41,6 +42,17 @@ class MainActivity : ComponentActivity() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+        }
+
+        // If a new APK version was installed, clear the cached experiment URL so
+        // match-session runs again and picks up the correct experiment for this build.
+        val currentVersion = BuildConfig.VERSION_CODE
+        val storedVersion  = prefs.getInt(KEY_VERSION_CODE, -1)
+        if (storedVersion != currentVersion) {
+            prefs.edit()
+                .remove(KEY_EXPERIMENT_URL)
+                .putInt(KEY_VERSION_CODE, currentVersion)
+                .apply()
         }
 
         val savedUrl = prefs.getString(KEY_EXPERIMENT_URL, null)
