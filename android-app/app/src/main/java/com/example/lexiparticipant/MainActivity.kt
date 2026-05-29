@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
 import android.os.Bundle
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -280,6 +281,14 @@ private fun ChatScreen(url: String, onWebViewCreated: ((WebView) -> Unit)? = nul
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                         settings.mixedContentMode =
                             android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                    }
+                    // The auth cookie is set by the API server (Render domain) while the
+                    // page is served from Vercel — a cross-origin (third-party) cookie.
+                    // Android 5+ blocks these by default; explicitly allow them so the
+                    // session persists across launches.
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                     }
                     webViewClient = object : WebViewClient() {
                         override fun onReceivedError(
