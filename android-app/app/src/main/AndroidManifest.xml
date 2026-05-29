@@ -4,6 +4,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Required for setFullScreenIntent to wake the screen on Android 14+ (API 34+) -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
 
 
@@ -24,7 +26,9 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.LexiParticipant">
+            android:theme="@style/Theme.LexiParticipant"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
