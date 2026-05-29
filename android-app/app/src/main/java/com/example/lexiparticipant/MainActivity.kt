@@ -68,19 +68,30 @@ class MainActivity : ComponentActivity() {
                 .apply()
         }
 
-        // If this launch came from a notification tap, load that conversation directly.
-        // We still have the experiment URL cached for when the user navigates back home.
         val deepLinkUrl = intent?.getStringExtra("deepLinkUrl")
+
+        // If this launch came from a notification tap, honour the deep link
+        // immediately — regardless of whether a savedUrl exists.
+        // Also restore the base experiment URL from the deep link so future
+        // regular launches (without a notification) still work correctly.
+        if (!deepLinkUrl.isNullOrEmpty()) {
+            // Extract base experiment URL: everything up to and including /e/:id
+            // e.g. https://host/e/abc123/c/def456  →  https://host/e/abc123
+            val baseUrl = Regex("(https?://[^/]+/e/[a-fA-F0-9]{24})").find(deepLinkUrl)?.groupValues?.get(1)
+            if (baseUrl != null) {
+                prefs.edit().putString(KEY_EXPERIMENT_URL, baseUrl).apply()
+            }
+            setContent { MaterialTheme { ChatScreen(url = deepLinkUrl, onWebViewCreated = { activeWebView = it }) } }
+            return
+        }
 
         val savedUrl = prefs.getString(KEY_EXPERIMENT_URL, null)
 
         if (savedUrl != null) {
-            // Already matched — load the experiment home (or deep link if present).
-            val initialUrl = deepLinkUrl ?: savedUrl
-            setContent { MaterialTheme { ChatScreen(url = initialUrl, onWebViewCreated = { activeWebView = it }) } }
+            setContent { MaterialTheme { ChatScreen(url = savedUrl, onWebViewCreated = { activeWebView = it }) } }
         } else {
-            // First launch: show a loading screen while we attempt to match this
-            // device's IP to a recent APK download session on the server.
+            // First launch (or after version upgrade with no notification context):
+            // try to auto-match this device to a recent APK download session.
             setContent { MaterialTheme { MatchingScreen() } }
 
             CoroutineScope(Dispatchers.IO).launch {
@@ -90,8 +101,7 @@ class MainActivity : ComponentActivity() {
                         prefs.edit().putString(KEY_EXPERIMENT_URL, experimentUrl).apply()
                         setContent { MaterialTheme { ChatScreen(url = experimentUrl, onWebViewCreated = { activeWebView = it }) } }
                     } else {
-                        // No automatic match — fall back to the manual setup screen
-                        // so the researcher / participant can paste the URL directly.
+                        // No automatic match — fall back to the manual setup screen.
                         setContent {
                             MaterialTheme {
                                 SetupScreen(onContinue = { url ->
