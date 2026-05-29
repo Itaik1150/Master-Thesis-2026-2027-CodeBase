@@ -47,7 +47,7 @@ export const defaultExperiment = {
     displaySettings: {
         welcomeHeader: 'Welcome',
         welcomeContent:
-            'This is an experiment that is being carried out by Ben-Gurion University (BGU).\nHere you will have a therapy session with a chat bot.\nThe conversation is completely anonymous.\nFeel free to share as you like.',
+            'This study is conducted by Ben-Gurion University of the Negev (BGU) as part of an academic research project.\nYou are invited to engage in open-ended conversations with an AI conversational agent on topics of your choice.\nAll interactions are fully anonymous and will be used solely for research purposes.',
     },
     experimentForms: {
         registration: null,
