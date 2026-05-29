@@ -17,26 +17,26 @@ def test_full_proactive_cycle():
     result = research_service.run_full_proactive_cycle()
     
     # Display results
-    print(f"\n📊 Final Results:")
-    print(f"✅ Success: {result.get('success', False)}")
+    # print(f"\n📊 Final Results:")
+    # print(f"✅ Success: {result.get('success', False)}")
     
-    if result.get('success'):
-        print(f"🆔 Cycle ID: {result.get('cycle_id', 'N/A')}")
-        print(f"⏱️ Duration: {result.get('duration', 0):.2f} seconds")
+    # if result.get('success'):
+    #     print(f"🆔 Cycle ID: {result.get('cycle_id', 'N/A')}")
+    #     print(f"⏱️ Duration: {result.get('duration', 0):.2f} seconds")
         
-        results = result.get('results', {})
-        print(f"📱 FCM Sent: {results.get('fcm_sent', 0)}")
-        print(f"💬 Messages Injected: {results.get('injected', 0)}")
-        print(f"❌ FCM Failed: {results.get('fcm_failed', 0)}")
-        print(f"❌ Injection Failed: {results.get('injection_failed', 0)}")
+    #     results = result.get('results', {})
+    #     print(f"📱 FCM Sent: {results.get('fcm_sent', 0)}")
+    #     print(f"💬 Messages Injected: {results.get('injected', 0)}")
+    #     print(f"❌ FCM Failed: {results.get('fcm_failed', 0)}")
+    #     print(f"❌ Injection Failed: {results.get('injection_failed', 0)}")
         
-        message_used = result.get('message_used', {})
-        print(f"🎯 Message Used: {message_used.get('generated_message', 'N/A')}")
-        print(f"🔖 Trigger Source: {message_used.get('trigger_source', 'N/A')}")
+    #     message_used = result.get('message_used', {})
+    #     print(f"🎯 Message Used: {message_used.get('generated_message', 'N/A')}")
+    #     print(f"🔖 Trigger Source: {message_used.get('trigger_source', 'N/A')}")
         
-    else:
-        print(f"❌ Error: {result.get('error', 'Unknown error')}")
-        print(f"📝 Message: {result.get('message', 'No message')}")
+    # else:
+    #     print(f"❌ Error: {result.get('error', 'Unknown error')}")
+    #     print(f"📝 Message: {result.get('message', 'No message')}")
     
     return result
 
@@ -64,13 +64,13 @@ def test_individual_components():
         print(f"   👤 {user.get('username', 'Unknown')} ({user.get('isProactive', False)})")
 
 if __name__ == "__main__":
-    print("Choose test mode:")
-    print("1. Full proactive cycle test")
-    print("2. Individual component tests")
-    print("3. Both tests")
+    # print("Choose test mode:")
+    # print("1. Full proactive cycle test")
+    # print("2. Individual component tests")
+    # print("3. Both tests")
     
-    choice = input("Enter choice (1, 2, or 3): ").strip()
-    
+    # choice = input("Enter choice (1, 2, or 3): ").strip()
+    choice = "1"
     if choice == "1":
         test_full_proactive_cycle()
     elif choice == "2":

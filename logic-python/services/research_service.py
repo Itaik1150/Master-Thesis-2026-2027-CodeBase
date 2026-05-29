@@ -17,7 +17,7 @@ MEMORY_CONVERSATIONS_LIMIT = 10    # how many past conversations to read per use
 from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
 from services.llm_service import ProactiveLogic
-from heuristics import temporal
+from heuristics import temporal, affective, behavioural_gap
 
 class ResearchService:
     """
@@ -48,25 +48,15 @@ class ResearchService:
                 print("❌ Failed to connect to MongoDB")
                 return False
             
-            # Update agent.firstChatSentence with simple string
-            print(f"🔍 Looking for user with ID: {user_id}")
-            print(f"🔍 Type of user_id: {type(user_id)}")
-            
             result = mongodb_client.db[mongodb_client.users_collection].update_one(
                 {"_id": ObjectId(user_id)},
                 {"$set": {"agent.firstChatSentence": message}}
             )
             
-            # Use matched_count to detect if user was found and updated
             if result.matched_count > 0:
-                if result.modified_count > 0:
-                    print(f"✅ Successfully injected message for user {user_id}")
-                    print(f"📝 Message: '{message}'")
-                else:
-                    print(f"ℹ️ Message already exists for user {user_id} (no change needed)")
                 return True
             else:
-                print(f"❌ User {user_id} not found in database")
+                print(f"❌ inject_prompt: user {user_id} not found")
                 return False
                 
         except Exception as e:
@@ -406,8 +396,9 @@ class ResearchService:
         # ── Heuristic candidates will be injected here in Phase 4.3–4.5 ────
 
         # ── Topic-based fill (up to MAX_CANDIDATES total) ────────────────────
-        topics = ["technology", "health", "travel", "culture", "sport",
-                  "nature", "food", "music", "books", "cinema"]
+        # topics = ["technology", "health", "travel", "culture", "sport",
+        #           "nature", "food", "music", "books", "cinema"]
+        topics = ["technology"]
         random.shuffle(topics)
         for topic in topics:
             if len(candidates) >= MAX_CANDIDATES:
@@ -422,8 +413,6 @@ class ResearchService:
                     "timestamp": datetime.now(),
                     "llm_response": {"should_send": True, "message": msg},
                 })
-                print(f"💡 Topic candidate [{topic}]: {msg}")
-
         print(f"🎯 Pool ready: {len(candidates)} topic candidates")
         return candidates
 
@@ -548,11 +537,9 @@ class ResearchService:
             news = [c for c in unused if c["source"] == "news"]
             chosen = news[0] if news else unused[0]
         else:
-            print(f"⚠️  All candidate topics are currently blocked, using fallback")
             chosen = candidates[0]
 
-        print(f"🎯 Selected [{chosen['source']}:{chosen['topic_label']}] "
-              f"(blocked-last: {blocked or 'none'})")
+        print(f"🎯 Selected [{chosen['source']}:{chosen['topic_label']}]")
         return chosen
 
     def select_personalized_message(self, candidates: List[Dict], memory: Dict) -> Optional[Dict]:
@@ -695,21 +682,29 @@ class ResearchService:
 
                     # ── Guard: preserve existing rich fields when LLM extraction
                     # fails (e.g. timeout) so we don't overwrite good data with
-                    # empty lists. Also always carry forward fired_temporal_mentions
-                    # so temporal nudges can't re-fire after a failed extraction.
+                    # empty lists. Also carry forward heuristic-managed fields
+                    # (fired_temporal_mentions, pending_affective_followup,
+                    # last_analyzed_conversation_id) which are written by the
+                    # heuristic modules themselves and must survive memory saves.
                     existing_pm = user.get("proactiveMemory") or {}
                     for field in ("future_mentions", "interests", "conversation_insight"):
                         if not memory.get(field) and existing_pm.get(field):
                             memory[field] = existing_pm[field]
-                    if existing_pm.get("fired_temporal_mentions"):
-                        memory["fired_temporal_mentions"] = existing_pm["fired_temporal_mentions"]
+                    for field in (
+                        "fired_temporal_mentions",
+                        "pending_affective_followup",
+                        "last_affective_analyzed_msg_count",
+                        "open_intents",
+                        "pending_gap_followup",
+                        "last_intent_scan_conversation_id",
+                    ):
+                        if existing_pm.get(field):
+                            memory[field] = existing_pm[field]
 
                     self.save_user_memory(user_id, memory)
                     print(
-                        f"🧠 Memory for {username}: "
-                        f"sent={memory.get('topics_sent_recently', [])}, "
-                        f"interests={memory.get('interests', [])}, "
-                        f"future_mentions={len(memory.get('future_mentions') or [])}, "
+                        f"🧠 [{username}] interests={len(memory.get('interests') or [])} "
+                        f"future_mentions={len(memory.get('future_mentions') or [])} "
                         f"lang={memory.get('preferred_language', 'he')}"
                     )
             except Exception as e:
@@ -717,11 +712,92 @@ class ResearchService:
             finally:
                 mongodb_client.disconnect()
 
-            # ── Phase 4.3: Temporal heuristic ────────────────────────────────
-            # Check before the topic pool. If a future mention is within its
-            # lead-time window, build a temporal candidate and use it directly.
-            temporal_nudge = temporal.evaluate(user)
-            if temporal_nudge:
+            # ── Phase 4.3–4.5: Heuristics — priority: affective → gap → temporal → topic
+            #
+            # Step 1 (side-effects): run scans that may schedule future nudges.
+            # These only write to MongoDB and never fire a message on their own.
+            affective.analyze_and_schedule(user, mongodb_client, self.llm_service)
+            behavioural_gap.scan_for_gaps(user, mongodb_client, self.llm_service)
+
+            # Step 2: reload proactiveMemory from MongoDB before evaluate().
+            # The user dict was loaded at the START of the cycle, before save_user_memory
+            # and the heuristic scans wrote new data.  Without a reload, evaluate()
+            # would read stale state — e.g. future_mentions saved this cycle would be
+            # invisible to temporal.evaluate(), and pending followups written by the
+            # scans would be missed entirely.
+            try:
+                if mongodb_client.connect():
+                    fresh_doc = mongodb_client.db[mongodb_client.users_collection].find_one(
+                        {"_id": ObjectId(user_id)},
+                        {"proactiveMemory": 1},
+                    )
+                    if fresh_doc:
+                        user = {**user, "proactiveMemory": fresh_doc.get("proactiveMemory") or {}}
+            except Exception as e:
+                print(f"⚠️  Could not reload proactiveMemory for {username}: {e}")
+            finally:
+                mongodb_client.disconnect()
+
+            # Step 3: check if any heuristic should fire RIGHT NOW.
+            # Evaluate all three before branching so we can log clearly.
+            affective_nudge = affective.evaluate(user)
+            gap_nudge       = behavioural_gap.evaluate(user)
+            temporal_nudge  = temporal.evaluate(user)
+
+            memory_pm = user.get("proactiveMemory") or {}
+            print(
+                f"\n🔎 [{username}] affective={'🔥' if affective_nudge else '—'} "
+                f"gap={'🔥' if gap_nudge else '—'} "
+                f"temporal={'🔥' if temporal_nudge else '—'} "
+                f"| future_mentions={len(memory_pm.get('future_mentions') or [])} "
+                f"open_intents={len(memory_pm.get('open_intents') or [])}"
+            )
+
+            if affective_nudge:
+                print(
+                    f"💛 Affective heuristic fired for {username}: "
+                    f"{affective_nudge.emotion} ({affective_nudge.intensity:.2f})"
+                )
+                seed = (
+                    f"The user seemed {affective_nudge.emotion} in their last "
+                    f"conversation. Send a warm, gentle check-in in the user's language."
+                )
+                affective_candidate = {
+                    "trigger_source": "affective",
+                    "generated_message": seed,
+                    "source": "affective",
+                    "topic_label": "affective",
+                    "timestamp": datetime.now(),
+                    "llm_response": {},
+                }
+                # Strip future_mentions and interests so the LLM stays focused
+                # on the emotional seed and doesn't pivot to unrelated context.
+                emotion_memory = {**memory, "future_mentions": [], "interests": []}
+                message = self.select_personalized_message([affective_candidate], emotion_memory)
+
+            elif gap_nudge:
+                print(
+                    f"🔍 Behavioural-gap heuristic fired for {username}: "
+                    f"'{gap_nudge.intent_text[:50]}'"
+                )
+                seed = (
+                    f"The user said they planned to '{gap_nudge.intent_text}' "
+                    f"but hasn't mentioned it since. Ask gently how it went, "
+                    f"in the user's language."
+                )
+                gap_candidate = {
+                    "trigger_source": "behavioural_gap",
+                    "generated_message": seed,
+                    "source": "behavioural_gap",
+                    "topic_label": "behavioural_gap",
+                    "timestamp": datetime.now(),
+                    "llm_response": {},
+                }
+                # Same: strip unrelated context so personalization stays on the intent.
+                intent_memory = {**memory, "future_mentions": [], "interests": []}
+                message = self.select_personalized_message([gap_candidate], intent_memory)
+
+            elif temporal_nudge:
                 print(
                     f"🕐 Temporal heuristic fired for {username}: "
                     f"'{temporal_nudge.mention_text[:40]}' "
@@ -740,6 +816,7 @@ class ResearchService:
                     "llm_response": {},
                 }
                 message = self.select_personalized_message([temporal_candidate], memory)
+
             else:
                 # ── Default: pick + personalize from topic pool ───────────────
                 message = self.select_personalized_message(candidates, memory)
@@ -778,8 +855,12 @@ class ResearchService:
                         results["injected"] += 1
                         print(f"💬 Message injected for {username}")
 
-                        # Step 3: If temporal heuristic fired, stamp the mention
-                        if temporal_nudge:
+                        # Step 3: heuristic post-send cleanup
+                        if affective_nudge:
+                            affective.clear_followup(user_id, mongodb_client)
+                        elif gap_nudge:
+                            behavioural_gap.clear_followup(user_id, mongodb_client)
+                        elif temporal_nudge:
                             temporal.mark_fired(
                                 user_id,
                                 temporal_nudge.mention_text,

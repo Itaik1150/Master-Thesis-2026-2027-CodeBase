@@ -316,7 +316,7 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
             {"role": "user",   "content": user_prompt},
         ]
         try:
-            text   = self._call_llm(msgs, temperature=0.2, max_tokens=250, json_mode=True)
+            text   = self._call_llm(msgs, temperature=0.2, max_tokens=800, json_mode=True)
             parsed = json.loads(text)
 
             # Normalize future_mentions to the new {text, when_iso} shape.
@@ -516,6 +516,177 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
         except Exception as e:
             print(f"❌ personalize_message_for_user: unexpected error: {e}")
             return candidate_message
+
+    def analyze_conversation_emotion(
+        self,
+        messages: List[str],
+        language: str = "he",
+    ) -> Dict[str, Any]:
+        """
+        Phase 4.4: Assess the emotional load of a user's conversation messages.
+        Returns:
+            {
+              "primary_emotion": str,    e.g. "stressed", "anxious", "sad", "neutral"
+              "intensity": float,        0.0 (neutral) – 1.0 (extreme distress)
+              "needs_followup": bool,    True only when intensity >= 0.7
+              "suggested_delay_hours": int  hours before sending the check-in (2–8)
+            }
+        On any failure returns safe defaults (intensity=0, needs_followup=False)
+        so the affective heuristic is silently skipped rather than crashing.
+        """
+        empty: Dict[str, Any] = {
+            "primary_emotion": "neutral",
+            "intensity": 0.0,
+            "needs_followup": False,
+            "suggested_delay_hours": 4,
+        }
+        if not messages:
+            return empty
+
+        lang_label = "Hebrew" if language == "he" else "English"
+        joined = "\n".join(f"- {m}" for m in messages if m)
+
+        system_prompt = (
+            "You are analyzing conversation messages from a research participant "
+            "for academic purposes — not clinical use.\n\n"
+            "From the messages, assess:\n"
+            "- primary_emotion: the dominant emotion "
+            "(stressed, anxious, sad, frustrated, angry, happy, neutral).\n"
+            "- intensity: float 0.0–1.0 representing emotional load "
+            "(0.0 = completely neutral, 1.0 = extremely distressed).\n"
+            "- needs_followup: true ONLY if intensity >= 0.7 AND the emotion "
+            "suggests the person might benefit from a gentle supportive check-in "
+            "a few hours later.\n"
+            "- suggested_delay_hours: integer 2–8, hours to wait before sending "
+            "the check-in (shorter for more acute emotions).\n\n"
+            "Return ONLY valid JSON with exactly these four keys."
+        )
+        user_prompt = f"Participant messages ({lang_label}):\n{joined}"
+
+        msgs = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ]
+        try:
+            text   = self._call_llm(msgs, temperature=0.2, max_tokens=120, json_mode=True)
+            parsed = json.loads(text)
+            return {
+                "primary_emotion":      str(parsed.get("primary_emotion", "neutral")),
+                "intensity":            float(parsed.get("intensity", 0.0)),
+                "needs_followup":       bool(parsed.get("needs_followup", False)),
+                "suggested_delay_hours": int(parsed.get("suggested_delay_hours", 4)),
+            }
+        except json.JSONDecodeError as e:
+            print(f"⚠️  analyze_conversation_emotion: invalid JSON: {e}")
+            return empty
+        except Exception as e:
+            print(f"⚠️  analyze_conversation_emotion: error: {e}")
+            return empty
+
+    def extract_stated_intents(
+        self,
+        messages: List[str],
+        language: str = "he",
+    ) -> List[Dict[str, Any]]:
+        """
+        Phase 4.5: Extract explicit concrete plans or commitments from conversation messages.
+
+        Returns a list of {"intent": str} objects where each intent is a concise
+        English description of what the user committed to (e.g. "go to the gym").
+        Returns [] on any failure or when no clear commitments are found.
+
+        Only extracts concrete, time-bound-ish plans — not vague wishes.
+        """
+        if not messages:
+            return []
+
+        joined = "\n".join(f"- {m}" for m in messages[-30:] if m)
+
+        system_prompt = (
+            "You analyze conversation messages from a research participant.\n"
+            "Extract only EXPLICIT, concrete plans or commitments the user expressed.\n\n"
+            "Valid examples:\n"
+            "  - 'I'll go to the gym tomorrow'\n"
+            "  - 'I'm starting that online course next week'\n"
+            "  - 'I plan to call my mom tonight'\n\n"
+            "Invalid examples (too vague — do NOT include):\n"
+            "  - 'I want to be healthier'\n"
+            "  - 'Maybe I'll try that someday'\n"
+            "  - 'I should exercise more'\n\n"
+            "Return JSON with a single key 'intents': a list of objects, each with "
+            "key 'intent' (concise English description, e.g. 'go to the gym'). "
+            "Return {\"intents\": []} if no clear commitments are found."
+        )
+        user_prompt = f"Participant messages:\n{joined}"
+
+        msgs = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ]
+        try:
+            text   = self._call_llm(msgs, temperature=0.2, max_tokens=200, json_mode=True)
+            parsed = json.loads(text)
+            intents = parsed.get("intents", []) or []
+            return [i for i in intents if isinstance(i, dict) and i.get("intent")]
+        except Exception as e:
+            print(f"⚠️  extract_stated_intents: error: {e}")
+            return []
+
+    def check_intent_completion(
+        self,
+        intent_text: str,
+        recent_messages: List[str],
+        language: str = "he",
+    ) -> Dict[str, Any]:
+        """
+        Phase 4.5: Determine if a user's recent messages indicate they followed
+        through on a previously stated intent.
+
+        Returns:
+            {
+              "resolved": bool,
+              "outcome": "positive" | "negative" | "unknown"
+            }
+        - positive:  user mentioned doing it / completing it
+        - negative:  user explicitly mentioned NOT doing it / cancelling
+        - unknown:   messages give no signal either way → triggers the nudge
+
+        Returns {"resolved": False, "outcome": "unknown"} on any failure.
+        """
+        default: Dict[str, Any] = {"resolved": False, "outcome": "unknown"}
+        if not intent_text or not recent_messages:
+            return default
+
+        joined = "\n".join(f"- {m}" for m in recent_messages[-30:] if m)
+
+        system_prompt = (
+            f"A research participant previously intended to: '{intent_text}'.\n\n"
+            "Based on their recent messages, determine whether they followed through:\n"
+            "- outcome: 'positive' if they mentioned doing it or completing it\n"
+            "- outcome: 'negative' if they explicitly mentioned NOT doing it or cancelling\n"
+            "- outcome: 'unknown' if their messages give no clear signal either way\n"
+            "- resolved: true only when outcome is 'positive' or 'negative'\n\n"
+            "Return ONLY valid JSON with exactly two keys: resolved, outcome."
+        )
+        user_prompt = f"Recent messages:\n{joined}"
+
+        msgs = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ]
+        try:
+            text   = self._call_llm(msgs, temperature=0.1, max_tokens=80, json_mode=True)
+            parsed = json.loads(text)
+            outcome = str(parsed.get("outcome", "unknown"))
+            if outcome not in ("positive", "negative", "unknown"):
+                outcome = "unknown"
+            return {
+                "resolved": bool(parsed.get("resolved", False)),
+                "outcome":  outcome,
+            }
+        except Exception as e:
+            print(f"⚠️  check_intent_completion: error: {e}")
+            return default
 
     def generate_topic_message(self, topic: str) -> str:
         """

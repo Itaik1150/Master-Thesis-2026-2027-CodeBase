@@ -31,22 +31,17 @@ class MongoDBClient:
     def connect(self):
         """Establish MongoDB connection"""
         try:
-            print(f"DEBUG: Attempting to connect to: {self.mongo_url}")
             self.client = MongoClient(self.mongo_url)
             self.db = self.client[self.db_name]
-            print(f"Connected to MongoDB: {self.mongo_url}")
-            print(f"Using database: {self.db_name}")
-            print(f"Using collection: {self.users_collection}")
             return True
         except Exception as e:
-            print(f"Failed to connect to MongoDB: {e}")
+            print(f"❌ Failed to connect to MongoDB: {e}")
             return False
             
     def disconnect(self):
         """Close MongoDB connection"""
         if self.client:
             self.client.close()
-            print("Disconnected from MongoDB")
             
     def get_users_with_fcm_tokens(self) -> List[Dict[str, Any]]:
         """Fetch all users who have valid FCM tokens"""
