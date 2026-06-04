@@ -25,23 +25,32 @@ class FCMService:
         default_title: Optional[str] = None,
         dry_run: bool = False,
     ):
-        self.service_account_json = service_account_json or os.getenv("SERVICE_ACCOUNT_JSON", "")
-        if not self.service_account_json:
-            raise ValueError(
-                "Missing SERVICE_ACCOUNT_JSON. Provide service_account_json=... or set env var SERVICE_ACCOUNT_JSON."
-            )
-        
-        # Fix path: ensure it's a proper file path
-        if not os.path.isabs(self.service_account_json):
-            # If relative path, make it absolute from current directory
-            self.service_account_json = os.path.join(os.path.dirname(__file__), self.service_account_json)
-        
         self.default_title = default_title or os.getenv("FCM_DEFAULT_TITLE", "Lexi")
         self.dry_run = dry_run
 
         # Initialize Firebase only once
         if not firebase_admin._apps:
-            cred = credentials.Certificate(self.service_account_json)
+            # Prefer SERVICE_ACCOUNT_JSON_CONTENT (a JSON string, safe for cloud env vars)
+            # over SERVICE_ACCOUNT_JSON (a file path, used locally).
+            json_content = os.getenv("SERVICE_ACCOUNT_JSON_CONTENT", "")
+            if json_content:
+                import json as _json
+                import tempfile
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+                tmp.write(json_content)
+                tmp.flush()
+                cred = credentials.Certificate(tmp.name)
+                tmp.close()
+            else:
+                sa_path = service_account_json or os.getenv("SERVICE_ACCOUNT_JSON", "")
+                if not sa_path:
+                    raise ValueError(
+                        "Missing Firebase credentials. Set SERVICE_ACCOUNT_JSON_CONTENT "
+                        "(JSON string) or SERVICE_ACCOUNT_JSON (file path)."
+                    )
+                if not os.path.isabs(sa_path):
+                    sa_path = os.path.join(os.path.dirname(__file__), sa_path)
+                cred = credentials.Certificate(sa_path)
             
             # Initialize Firebase app with default name (not specifying name)
             firebase_admin.initialize_app(cred, {
