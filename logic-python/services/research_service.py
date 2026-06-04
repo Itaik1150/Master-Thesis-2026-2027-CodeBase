@@ -1029,6 +1029,20 @@ class ResearchService:
                 conversation_id = self._create_conversation(user_id, experiment_id_str, num_convs)
                 if conversation_id:
                     print(f"📝 Pre-created conversation {conversation_id} for {username}")
+                    # Store so server can reset firstChatSentence the moment the user opens it.
+                    try:
+                        if mongodb_client.connect():
+                            mongodb_client.db[mongodb_client.users_collection].update_one(
+                                {"_id": ObjectId(user_id)},
+                                {"$set": {"proactiveMemory.pending_proactive_conversation_id": conversation_id}},
+                            )
+                    except Exception as e:
+                        print(f"⚠️  Could not store pending_proactive_conversation_id: {e}")
+                    finally:
+                        try:
+                            mongodb_client.disconnect()
+                        except Exception:
+                            pass
                 else:
                     print(f"⚠️  Could not pre-create conversation for {username} — FCM will open home screen")
 

@@ -113,8 +113,53 @@ class ConvesationsController {
 
         const conversation = await conversationsService.getConversation(conversationId);
 
+        // Fire-and-forget: if this is the pending proactive conversation for its owner,
+        // immediately reset firstChatSentence so the next manual conversation uses
+        // the original agent greeting instead of the proactive override.
+        this.consumeProactivePromptIfNeeded(conversationId).catch(() => {});
+
         res.status(200).send(conversation);
     });
+
+    private async consumeProactivePromptIfNeeded(conversationId: string): Promise<void> {
+        try {
+            const db = mongoose.connection.db;
+
+            // Find conversation metadata to get the owner's userId
+            const meta = await db.collection('metadata_conversations').findOne(
+                { _id: new mongoose.Types.ObjectId(conversationId) },
+                { projection: { userId: 1 } },
+            );
+            if (!meta?.userId) return;
+
+            // Check if this conversation is the pending proactive one for that user
+            const user = await db.collection('users').findOne(
+                {
+                    _id: new mongoose.Types.ObjectId(String(meta.userId)),
+                    'proactiveMemory.pending_proactive_conversation_id': conversationId,
+                },
+                { projection: { 'proactiveMemory.injected_prompt_original': 1 } },
+            );
+            if (!user) return;
+
+            const original = user.proactiveMemory?.injected_prompt_original ?? '';
+
+            await db.collection('users').updateOne(
+                { _id: user._id },
+                {
+                    $set:   { 'agent.firstChatSentence': original },
+                    $unset: {
+                        'proactiveMemory.pending_proactive_conversation_id': '',
+                        'proactiveMemory.injected_prompt_original':          '',
+                        'proactiveMemory.injected_prompt_reset_after':       '',
+                    },
+                },
+            );
+            console.log(`[proactive] reset firstChatSentence for user ${meta.userId} on conversation open`);
+        } catch (_) {
+            // Non-critical — swallow errors silently
+        }
+    }
 
     updateConversationMetadata = requestHandler(async (req: Request, res: Response) => {
         const { conversationId, data, isPreConversation } = req.body;
