@@ -36,38 +36,85 @@ class ResearchService:
         
         self.llm_service = ProactiveLogic()
     
+    # How long (hours) the proactive firstChatSentence stays before reverting.
+    PROMPT_EXPIRY_HOURS = float(os.getenv("PROMPT_EXPIRY_HOURS", "2"))
+
     def inject_prompt(self, user_id: str, message: str) -> bool:
         """
-        Inject message into agent.firstChatSentence
-        
-        Args:
-            user_id: MongoDB user ID
-            message: Simple string message to inject
-            
-        Returns:
-            True if successful, False otherwise
+        Overwrite agent.firstChatSentence with the proactive message.
+        Also saves the original sentence and a reset timestamp (now + PROMPT_EXPIRY_HOURS)
+        in proactiveMemory so expire_injected_prompts() can restore it later.
         """
         try:
             if not mongodb_client.connect():
                 print("❌ Failed to connect to MongoDB")
                 return False
-            
-            result = mongodb_client.db[mongodb_client.users_collection].update_one(
+
+            user = mongodb_client.db[mongodb_client.users_collection].find_one(
                 {"_id": ObjectId(user_id)},
-                {"$set": {"agent.firstChatSentence": message}}
+                {"agent.firstChatSentence": 1},
             )
-            
-            if result.matched_count > 0:
-                return True
-            else:
+            if not user:
                 print(f"❌ inject_prompt: user {user_id} not found")
                 return False
-                
+
+            original = (user.get("agent") or {}).get("firstChatSentence", "")
+            reset_after = datetime.now(timezone.utc) + timedelta(hours=self.PROMPT_EXPIRY_HOURS)
+
+            mongodb_client.db[mongodb_client.users_collection].update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {
+                    "agent.firstChatSentence": message,
+                    "proactiveMemory.injected_prompt_original": original,
+                    "proactiveMemory.injected_prompt_reset_after": reset_after,
+                }},
+            )
+            return True
+
         except Exception as e:
             print(f"❌ Error injecting prompt: {e}")
             return False
         finally:
             mongodb_client.disconnect()
+
+    def expire_injected_prompts(self) -> None:
+        """
+        Called at the start of every cycle.
+        For any user whose injected prompt expiry time has passed,
+        restore firstChatSentence to the saved original value.
+        """
+        try:
+            if not mongodb_client.connect():
+                return
+
+            now = datetime.now(timezone.utc)
+            expired_users = list(mongodb_client.db[mongodb_client.users_collection].find(
+                {"proactiveMemory.injected_prompt_reset_after": {"$lte": now}},
+                {"_id": 1, "username": 1,
+                 "proactiveMemory.injected_prompt_original": 1},
+            ))
+
+            for u in expired_users:
+                original = (u.get("proactiveMemory") or {}).get("injected_prompt_original", "")
+                mongodb_client.db[mongodb_client.users_collection].update_one(
+                    {"_id": u["_id"]},
+                    {
+                        "$set":  {"agent.firstChatSentence": original},
+                        "$unset": {
+                            "proactiveMemory.injected_prompt_original": "",
+                            "proactiveMemory.injected_prompt_reset_after": "",
+                        },
+                    },
+                )
+                print(f"⏰ Reset expired prompt for {u.get('username', u['_id'])}")
+
+        except Exception as e:
+            print(f"⚠️  expire_injected_prompts error: {e}")
+        finally:
+            try:
+                mongodb_client.disconnect()
+            except Exception:
+                pass
     
     def send_notification(self, user_id: str, message: str) -> bool:
         """
@@ -985,10 +1032,6 @@ class ResearchService:
                 else:
                     print(f"⚠️  Could not pre-create conversation for {username} — FCM will open home screen")
 
-                # Step 2b: Restore the original firstChatSentence from the agents
-                # collection so manually-started conversations get the default
-                # greeting, not the proactive override.
-                self._reset_first_chat_sentence(user)
 
                 # Step 3: Send FCM.  Include conversationId + experimentId so the
                 # Android app can deep-link directly into the conversation.
@@ -1084,6 +1127,10 @@ class ResearchService:
         print(f"\n=== 🚀 Starting Proactive Cycle {cycle_id[:8]}... ===")
 
         try:
+            # Step 0: Restore any firstChatSentence overrides whose 2-hour window
+            # has expired since the last cycle.
+            self.expire_injected_prompts()
+
             # Step 1: Build candidate pool (news + topic fill)
             candidates = self.build_candidate_pool()
 
