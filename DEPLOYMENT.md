@@ -1,25 +1,40 @@
 # Lexi — Cloud Deployment Guide
 
-> **Status: ✅ Fully deployed as of April 29, 2026.**
-> All steps below are complete. This file is kept as a reference for future changes and troubleshooting.
->
-> **Goal:** Deploy the Lexi web app to public URLs so the Android APK works from any network (edu WiFi, home, mobile data) and your supervisor can use the app without any local setup.
+> **Status: ✅ Production as of June 4, 2026**  
+> React on Vercel, **Node API + Python scheduler on one Render Starter instance**, MongoDB Atlas, Firebase FCM.
 
-## What gets deployed where
+## What gets deployed where (current)
 
 | Component | Service | Cost | Notes |
 |-----------|---------|------|-------|
-| React client (`Lexi/client/`) | **Vercel** | Free | Auto-deploys on every GitHub push |
-| Node.js server (`Lexi/server/`) | **Render** | Free | ⚠️ Spins down after 15 min inactivity → ~40s cold start on first request. Acceptable for pilot/thesis stage. |
-| MongoDB | Atlas | Already live ✅ | Nothing to do |
-| Python engine | Your laptop | Free | Runs locally, connects to cloud services |
-| Firebase FCM | Google | Free tier ✅ | Nothing to do |
+| React client (`Lexi/client/`) | **Vercel** | Free | Root: `Lexi/client`, auto-deploy on push |
+| Node API + Python scheduler | **Render Web Service (Starter)** | ~$7/mo | Root: **repo root**; see § Combined Render service below |
+| MongoDB | **Atlas** | Free tier | Shared connection string for Node + Python |
+| Firebase FCM | Google | Free tier | Secret File `firebase.json` on Render |
+| Android APK | GitHub release / join link | — | Generic APK + `/join/:experimentId` |
 
-### ⚠️ About Render's free tier cold start
+### Combined Render service (important)
 
-When nobody has used the app for 15+ minutes, the server goes to sleep. The next request wakes it up — this takes ~40 seconds. After that, everything is fast again.
+One service runs both processes via `scripts/render-start.sh`:
 
-**Workaround (optional):** Sign up for [UptimeRobot](https://uptimerobot.com) (free) and add a monitor that pings your Render server URL every 10 minutes. This keeps it awake at no cost.
+| Setting | Value |
+|---------|--------|
+| Root Directory | *(empty — repository root)* |
+| Build Command | `bash scripts/render-build.sh` |
+| Start Command | `bash scripts/render-start.sh` |
+
+**Do not** point Start Command only at `npm start` in `Lexi/server` — that skips the proactive scheduler.
+
+### Firebase credentials on Render
+
+Use **Secret Files** → filename `firebase.json` (full service account JSON).  
+The Python code reads `/etc/secrets/firebase.json`.  
+Alternatively set env var `SERVICE_ACCOUNT_JSON_CONTENT` (entire JSON as one string).
+
+### Python env vars on the same Render service
+
+Add alongside Node vars: `OPENAI_API_KEY`, `MONGODB_URL`, `MONGODB_DB_NAME`, `MONGODB_USERS_COLLECTION`, `LEXI_SERVER_URL`, `FRONTEND_BASE_URL`, `LLM_PROVIDER`, `LLM_MODEL`, `DAILY_MESSAGE_LIMIT`.  
+**Do not** set `AFFECTIVE_DELAY_HOURS=0` in production (testing only).
 
 ---
 

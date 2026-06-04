@@ -1,189 +1,211 @@
-# Lexi Project - Complete End-to-End FCM Integration
+# Lexi Proactive Platform — Technical Documentation
 
-## 🎯 Project Overview
-This project establishes a full communication loop between Android app, Node.js server, and Python logic using MongoDB as a shared database for proactive notifications.
-
-## 🏗️ Architecture
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Android App   │───▶│  React Client  │───▶│  Node.js Server │
-│  (WebView)     │    │   (Forms)      │    │   (Express)    │
-│                 │    │                 │    │                 │
-│  FCM Token      │    │  User Data      │    │  MongoDB Atlas   │
-│  Capture        │    │  Registration   │    │  (LexiDB)     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                        │                        │
-         ▼                        ▼                        ▼
-         │                        │                        │
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│  Python Logic   │◀───│ MongoDB Client   │◀───│  Firebase FCM     │
-│  (Proactive)    │    │  (pymongo)      │    │  (Admin SDK)    │
-│                 │    │                 │    │                 │
-│  User Query      │    │  Real-time Data  │    │  Push Notifications│
-│  & Analysis      │    │  Retrieval      │    │  to Devices      │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-```
-
-## 📁 Project Structure
-
-```
-Master Thesis 2026-2027 CodeBase/
-├── android-app/                    # Android WebView app
-│   └── app/src/main/java/com/example/lexiparticipant/
-│       ├── MainActivity.kt          # WebView setup
-│       └── AndroidBridge.kt          # FCM token bridge
-├── Lexi/                          # Web application
-│   ├── client/                     # React frontend
-│   │   ├── src/
-│   │   │   ├── components/forms/
-│   │   │   │   ├── RegisterForm.tsx    # User registration
-│   │   │   │   └── LoginForm.tsx        # User login
-│   │   │   ├── services/
-│   │   │   │   └── fcmBridge.ts       # FCM token handling
-│   │   │   ├── hooks/
-│   │   │   │   └── useActiveUser.ts   # User state management
-│   │   │   └── DAL/server-requests/
-│   │   │       └── users.ts             # API calls
-│   │   └── .env.emulator              # Android emulator config
-│   └── server/                     # Node.js backend
-│       ├── src/
-│       │   ├── controllers/
-│       │   │   └── usersController.controller.ts  # User management
-│       │   ├── services/
-│       │   │   └── users.service.ts              # Database operations
-│       │   ├── models/
-│       │   │   └── UsersModel.ts               # MongoDB schema
-│       │   ├── routers/
-│       │   │   └── usersRouter.router.ts         # API routes
-│       │   ├── mongoDBProvider.ts           # MongoDB connection
-│       │   └── server.ts                  # Express server
-│       └── .env                         # Environment variables
-└── logic-python/                    # Python proactive logic
-    ├── core/
-    │   ├── models.py                # Data models
-    │   └── data_loader.py           # MongoDB integration
-    ├── services/
-    │   └── fcm_service.py          # Firebase FCM
-    ├── utils/
-    │   └── mongodb_client.py        # MongoDB client
-    ├── .env                         # Environment variables
-    ├── requirements.txt              # Dependencies
-    └── send_test_push.py          # Test script
-```
-
-## 🔧 Key Components
-
-### 1. Android App (`android-app/`)
-- **MainActivity.kt**: WebView container loading React app
-- **AndroidBridge.kt**: JavaScript interface for FCM token retrieval
-- **FCM Service**: Background service for token generation
-
-### 2. React Frontend (`Lexi/client/`)
-- **Registration/Login Forms**: Capture user data and FCM tokens
-- **FCM Bridge**: Communication between WebView and Android
-- **API Integration**: Send tokens to Node.js backend
-
-### 3. Node.js Server (`Lexi/server/`)
-- **Express API**: RESTful endpoints for user management
-- **MongoDB Integration**: Store users with FCM tokens
-- **CORS Configuration**: Support for Android emulator
-
-### 4. Python Logic (`logic-python/`)
-- **MongoDB Client**: Real-time data retrieval from Atlas
-- **FCM Service**: Firebase Admin SDK for push notifications
-- **Decision Engine**: Proactive notification logic
-
-## 🔄 Data Flow
-
-### Registration Flow:
-1. **User registers** in React app → Android captures FCM token
-2. **Token sent** to Node.js API → Stored in MongoDB Atlas
-3. **Python queries** MongoDB → Retrieves user with FCM token
-4. **Firebase sends** push notification → Android device receives
-
-### Proactive Notifications:
-1. **Python analyzes** user data and context
-2. **Decision engine** determines when to send notifications
-3. **FCM service** delivers personalized messages
-4. **Android app** displays proactive notifications
-
-## 🛠️ Technologies Used
-
-### Frontend:
-- **React**: User interface and forms
-- **TypeScript**: Type safety and development
-- **Android WebView**: Native app container
-
-### Backend:
-- **Node.js**: Express server and API
-- **MongoDB Atlas**: Cloud database storage
-- **Mongoose**: MongoDB object modeling
-
-### Python Logic:
-- **Python 3.12**: Core logic implementation
-- **pymongo**: MongoDB driver for database access
-- **Firebase Admin SDK**: Push notification service
-- **python-dotenv**: Environment variable management
-
-## 🚀 Deployment & Configuration
-
-### Environment Variables:
-```bash
-# MongoDB Atlas
-MONGODB_URL=mongodb+srv://itaik1150_db_user:7wYGyhm2vNl3aeay@cluster0.ls6m7wa.mongodb.net/?appName=Cluster0
-MONGODB_DB_NAME=LexiDB
-MONGODB_USERS_COLLECTION=users
-
-# Firebase
-SERVICE_ACCOUNT_JSON=services/lexi-72330-firebase-adminsdk-fbsvc-49c2c6ee82.json
-
-# Development
-FRONTEND_URL=http://localhost:3000
-PORT=5000
-```
-
-### Android Emulator Setup:
-```bash
-# Port forwarding for emulator communication
-adb reverse tcp:5000 tcp:5000
-adb reverse tcp:3000 tcp:3000
-```
-
-## 🧪 Testing & Verification
-
-### Test Scripts:
-1. **`send_test_push.py`**: End-to-end FCM notification testing
-2. **`test_auth.py`**: MongoDB connection verification
-3. **Manual Testing**: Android emulator registration flow
-
-### Success Metrics:
-- ✅ **MongoDB Connection**: Atlas database accessible
-- ✅ **User Registration**: Data persistence working
-- ✅ **FCM Token Capture**: Android bridge functional
-- ✅ **Push Notifications**: Firebase delivery confirmed
-- ✅ **End-to-End Flow**: Complete communication loop
-
-## 🎯 Thesis Achievement
-
-This project successfully demonstrates:
-- **Cross-platform integration** (Android, Web, Python)
-- **Real-time communication** (FCM push notifications)
-- **Cloud database synchronization** (MongoDB Atlas)
-- **Proactive system architecture** (Decision engine + notifications)
-- **Full development lifecycle** (Frontend → Backend → Logic → User)
-
-## 📝️ Future Enhancements
-
-1. **Enhanced Decision Logic**: ML-based notification timing
-2. **User Analytics**: Engagement metrics and optimization
-3. **Multi-device Support**: Tablet and phone compatibility
-4. **Offline Capabilities**: Local caching and sync
-5. **Security Hardening**: Token encryption and validation
+> **Last updated:** June 4, 2026  
+> Companion docs: [`README.md`](README.md), [`PLAN.md`](PLAN.md), [`PROACTIVE_NOTIFICATIONS.md`](PROACTIVE_NOTIFICATIONS.md), [`DEPLOYMENT.md`](DEPLOYMENT.md)
 
 ---
 
-**Project Status: ✅ COMPLETE - Full End-to-End FCM Integration Working!**
+## 1. Overview
 
-*Generated: March 1, 2026*
-*Last Updated: Successful FCM notification delivery confirmed*
+End-to-end system for running proactive conversation experiments:
+
+- **Lexi** — experiment management, chat UI, admin dashboard  
+- **Android app** — WebView participant client with FCM and deep links  
+- **Python engine** — scheduled proactive cycles, heuristics, LLM personalization, push delivery  
+
+All components share **MongoDB Atlas** and **Firebase Cloud Messaging**.
+
+---
+
+## 2. Architecture
+
+```
+┌──────────────────┐     HTTPS      ┌──────────────────┐
+│  Android APK     │ ──────────────▶│  React (Vercel)  │
+│  WebView + FCM   │                  │  Lexi/client     │
+└────────┬─────────┘                  └────────┬─────────┘
+         │ FCM token (JS bridge)              │ REST
+         ▼                                    ▼
+┌────────────────────────────────────────────────────────┐
+│  Node.js API (Render) — Lexi/server                   │
+│  Auth, users, experiments, conversations, /join        │
+└────────┬───────────────────────────────┬───────────────┘
+         │                               │
+         ▼                               ▼
+┌─────────────────┐            ┌─────────────────────────┐
+│  MongoDB Atlas  │◀───────────│  Python scheduler       │
+│  users, logs,   │  pymongo   │  logic-python/          │
+│  conversations  │            │  (same Render instance) │
+└─────────────────┘            └───────────┬─────────────┘
+                                           │ FCM Admin SDK
+                                           ▼
+                                 ┌─────────────────┐
+                                 │  Firebase FCM   │
+                                 └─────────────────┘
+```
+
+**Render single-instance model:** `scripts/render-start.sh` runs the Node server in the foreground and `python -u scheduler.py` in the background.
+
+---
+
+## 3. Components
+
+### 3.1 Android (`android-app/`)
+
+| File | Role |
+|------|------|
+| `MainActivity.kt` | WebView, cached experiment URL, deep link handling, third-party cookies |
+| `AndroidBridge.kt` | `window.Android` — FCM token, `setCurrentUserId` |
+| `LexiMessagingService.kt` | FCM receive, high-priority notification, deep-link intent |
+| `app/build.gradle.kts` | `versionCode`, join flow cache invalidation |
+
+Participants open the experiment via **join link** → generic APK → IP-based session match (`apk_sessions`).
+
+### 3.2 Lexi client (`Lexi/client/`)
+
+| Area | Role |
+|------|------|
+| `src/app/App.tsx` | Routes: admin, `/e/:experimentId`, conversation, login |
+| `src/services/fcmBridge.ts` | Sync FCM token after login |
+| `ProactiveSettingsModal.tsx` | Proactive toggle, heuristics, LLM model, join link |
+| `ProtectedExperimentRoute.tsx` | Auth guard + `returnTo` redirect |
+| `FinishConversationDialog.tsx` | End chat + return home |
+
+### 3.3 Lexi server (`Lexi/server/`)
+
+| Area | Role |
+|------|------|
+| `usersController` | Register, login, 30-day cookie, FCM token, proactive prompt expiry on session |
+| `experimentsController` | CRUD, proactive settings, bulk `isProactive` sync |
+| `conversationsController` | Chat, stream, finish, **proactive opener reset on user message** |
+| `joinController` | Landing page session + `match-session` for deferred deep link |
+
+**Representative endpoints**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/users/create` | Register (+ optional `fcmToken`) |
+| POST | `/users/login` | Login |
+| POST | `/users/fcm-token` | Update device token |
+| GET | `/users/user` | Active user + cookie refresh |
+| POST | `/conversations/create` | New conversation (used by Python pre-create) |
+| POST | `/conversations/message` | Send message |
+| GET | `/conversations/message/stream` | SSE assistant reply |
+| GET | `/conversations/conversation` | Load conversation |
+| POST | `/conversations/finish` | End conversation (+ opener reset) |
+| GET | `/join/:experimentId` | Participant onboarding page |
+| GET | `/join/match-session` | APK IP → experiment URL |
+
+### 3.4 Python engine (`logic-python/`)
+
+| File | Role |
+|------|------|
+| `scheduler.py` | Cron jobs (`FIRE_TIMES`), calls `run_full_proactive_cycle()` |
+| `run_cycle.py` | Single manual cycle (dev / smoke test) |
+| `services/research_service.py` | Orchestration, memory, inject, FCM, logging |
+| `services/llm_service.py` | OpenAI / Anthropic, extraction, personalization |
+| `services/fcm_service.py` | Firebase send; credentials from env or `/etc/secrets/firebase.json` |
+| `heuristics/*.py` | Temporal, affective, behavioural gap |
+| `utils/mongodb_client.py` | Atlas connection |
+
+---
+
+## 4. MongoDB collections (main)
+
+| Collection | Purpose |
+|------------|---------|
+| `users` | Participants, `agent`, `fcmToken`, `isProactive`, `proactiveMemory` |
+| `experiments` | Config, `experimentFeatures.proactiveSettings` |
+| `conversations` | Messages |
+| `metadata_conversations` | Conversation metadata, `userId`, `isFinished` |
+| `proactive_logs` | Per-send audit (`trigger_source`, message, status) |
+| `apk_sessions` | Deferred deep-link IP matching |
+
+---
+
+## 5. Proactive settings schema (experiment)
+
+```json
+{
+  "experimentFeatures": {
+    "proactiveSettings": {
+      "enabled": true,
+      "frequency": 30,
+      "heuristics": {
+        "temporal": true,
+        "affective": true,
+        "behaviouralGap": true
+      },
+      "llmModel": "gpt-4o"
+    }
+  }
+}
+```
+
+See [`PROACTIVE_NOTIFICATIONS.md`](PROACTIVE_NOTIFICATIONS.md) for which fields are enforced in Python vs UI-only.
+
+---
+
+## 6. Environment variables
+
+### Lexi server (`Lexi/server/.env`)
+
+| Variable | Description |
+|----------|-------------|
+| `MONGODB_URL` | Atlas connection string |
+| `MONGODB_DB_NAME` | Database name |
+| `JWT_SECRET_KEY` | Auth cookie signing |
+| `PORT` | Listen port (Render sets `10000`) |
+| `FRONTEND_URL` | CORS + redirects |
+| `OPENAI_API_KEY` | In-chat LLM (if used server-side) |
+
+### Lexi client
+
+| Variable | Description |
+|----------|-------------|
+| `REACT_APP_API_URL` | Node API base URL |
+
+### Python (`logic-python/.env` — local; mirror on Render)
+
+| Variable | Description |
+|----------|-------------|
+| `MONGODB_URL` | Atlas |
+| `MONGODB_DB_NAME` | e.g. `test` |
+| `MONGODB_USERS_COLLECTION` | e.g. `users` |
+| `OPENAI_API_KEY` | LLM |
+| `LLM_PROVIDER` / `LLM_MODEL` | Default model |
+| `ANTHROPIC_API_KEY` | If using Claude |
+| `SERVICE_ACCOUNT_JSON` | Local path to Firebase JSON |
+| `SERVICE_ACCOUNT_JSON_CONTENT` | Full JSON string (alternative) |
+| `LEXI_SERVER_URL` | Node API for `POST /conversations/create` |
+| `FRONTEND_BASE_URL` | Deep links in FCM |
+| `DAILY_MESSAGE_LIMIT` | Per-user daily cap |
+| `PROMPT_EXPIRY_HOURS` | Opener reset timer (default 2) |
+| `AFFECTIVE_DELAY_HOURS` | Affective follow-up delay (omit in prod) |
+
+**Render:** prefer Secret File `firebase.json` mounted at `/etc/secrets/firebase.json`.
+
+---
+
+## 7. Security notes
+
+- Do not commit `.env` or `*-firebase-adminsdk*.json` (see `.gitignore`).  
+- Rotate keys if they ever appeared in public git history.  
+- Production traffic should use HTTPS only (Vercel + Render).  
+- Participant auth: HTTP-only cookie, 30-day `maxAge`.
+
+---
+
+## 8. Operations checklist
+
+| Task | How |
+|------|-----|
+| Deploy code | `git push` → Vercel + Render auto-build |
+| Change notification times | `scheduler.py` `FIRE_TIMES` → push |
+| Run one cycle manually | `python logic-python/run_cycle.py` |
+| View sends | MongoDB `proactive_logs` |
+| Debug participant opener | `users.agent.firstChatSentence`, `proactiveMemory` |
+
+---
+
+*For deployment steps and Render configuration, see [`DEPLOYMENT.md`](DEPLOYMENT.md).*
