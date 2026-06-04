@@ -47,6 +47,19 @@ class ExperimentsController {
     updateExperimentsStatus = requestHandler(async (req: Request, res: Response) => {
         const { modifiedExperiments } = req.body;
         await experimentsService.updateExperimentsStatus(modifiedExperiments);
+
+        // When an experiment is deactivated, set all its users to isProactive: false
+        // so the Python engine stops sending them nudges immediately.
+        const db = mongoose.connection.db;
+        for (const exp of modifiedExperiments) {
+            if (exp.isActive === false) {
+                await db.collection('users').updateMany(
+                    { experimentId: String(exp.id), isProactive: { $ne: false } },
+                    { $set: { isProactive: false } },
+                );
+            }
+        }
+
         res.status(200).send();
     });
 

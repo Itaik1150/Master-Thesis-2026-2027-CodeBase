@@ -1,7 +1,6 @@
 import DeleteIcon from '@mui/icons-material/Delete';
 import DownloadIcon from '@mui/icons-material/Download';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
-import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
 import SimCardDownloadOutlinedIcon from '@mui/icons-material/SimCardDownloadOutlined';
 import { ListItemIcon, ListItemText, Menu, MenuItem } from '@mui/material';
@@ -59,17 +58,6 @@ export const MoreOptionsMenu = ({
                 <DownloadIcon fontSize="small" />
             </ListItemIcon>
             <ListItemText>Download Excel</ListItemText>
-        </MenuItem>
-        <MenuItem
-            onClick={() => {
-                onMenuClose();
-                handleMenuAction('proactive-settings');
-            }}
-        >
-            <ListItemIcon>
-                <NotificationsActiveIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText>Proactive Settings</ListItemText>
         </MenuItem>
         <MenuItem
             onClick={() => {
