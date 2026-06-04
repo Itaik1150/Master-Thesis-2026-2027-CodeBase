@@ -52,13 +52,17 @@ class ResearchService:
 
             user = mongodb_client.db[mongodb_client.users_collection].find_one(
                 {"_id": ObjectId(user_id)},
-                {"agent.firstChatSentence": 1},
+                {"agent.firstChatSentence": 1, "proactiveMemory.injected_prompt_original": 1},
             )
             if not user:
                 print(f"❌ inject_prompt: user {user_id} not found")
                 return False
 
-            original = (user.get("agent") or {}).get("firstChatSentence", "")
+            # Preserve the true default greeting across multiple injections:
+            # if there's already a saved original (from a previous un-reset injection),
+            # keep it so we never overwrite the real default with another proactive message.
+            existing_original = (user.get("proactiveMemory") or {}).get("injected_prompt_original")
+            original = existing_original if existing_original else (user.get("agent") or {}).get("firstChatSentence", "")
             reset_after = datetime.now(timezone.utc) + timedelta(hours=self.PROMPT_EXPIRY_HOURS)
 
             mongodb_client.db[mongodb_client.users_collection].update_one(
