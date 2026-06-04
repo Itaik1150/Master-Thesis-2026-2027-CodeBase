@@ -82,7 +82,7 @@ const FinishConversationDialog = ({ open, setIsOpen, questionnaireLink, form }) 
                             {questionnaireLink}
                         </a> */}
                     </DialogContent>
-                    <DialogActions>
+                    <DialogActions sx={{ justifyContent: 'center', pb: 2 }}>
                         <Button
                             variant="contained"
                             onClick={() => {
