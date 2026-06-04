@@ -13,6 +13,7 @@ To stop: Ctrl+C
 
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -43,8 +44,9 @@ WINDOW_END_HOUR   = 21   # exclusive
 
 
 def within_window() -> bool:
-    """Return True if the current local hour is inside the allowed window."""
-    return WINDOW_START_HOUR <= datetime.now().hour < WINDOW_END_HOUR
+    """Return True if the current Jerusalem hour is inside the allowed window."""
+    hour = datetime.now(ZoneInfo("Asia/Jerusalem")).hour
+    return WINDOW_START_HOUR <= hour < WINDOW_END_HOUR
 
 
 def proactive_job():
