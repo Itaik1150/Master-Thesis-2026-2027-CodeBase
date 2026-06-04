@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Optional
 
@@ -14,8 +15,9 @@ class FCMService:
     """
     Sends push notifications via Firebase Cloud Messaging (FCM).
 
-    Env vars:
-    - SERVICE_ACCOUNT_JSON: path to Firebase service account JSON file
+    Env vars (in order of preference):
+    - SERVICE_ACCOUNT_JSON_CONTENT: full Firebase service account JSON as a string (Render)
+    - SERVICE_ACCOUNT_JSON: file path locally, OR full JSON if value starts with '{'
     - FCM_DEFAULT_TITLE: default notification title (optional)
     """
 
@@ -30,35 +32,48 @@ class FCMService:
 
         # Initialize Firebase only once
         if not firebase_admin._apps:
-            # Prefer SERVICE_ACCOUNT_JSON_CONTENT (a JSON string, safe for cloud env vars)
-            # over SERVICE_ACCOUNT_JSON (a file path, used locally).
-            json_content = os.getenv("SERVICE_ACCOUNT_JSON_CONTENT", "")
-            if json_content:
-                import json as _json
-                import tempfile
-                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-                tmp.write(json_content)
-                tmp.flush()
-                cred = credentials.Certificate(tmp.name)
-                tmp.close()
-            else:
-                sa_path = service_account_json or os.getenv("SERVICE_ACCOUNT_JSON", "")
-                if not sa_path:
-                    raise ValueError(
-                        "Missing Firebase credentials. Set SERVICE_ACCOUNT_JSON_CONTENT "
-                        "(JSON string) or SERVICE_ACCOUNT_JSON (file path)."
-                    )
-                if not os.path.isabs(sa_path):
-                    sa_path = os.path.join(os.path.dirname(__file__), sa_path)
-                cred = credentials.Certificate(sa_path)
+            cred = self._load_credentials(service_account_json)
             
             # Initialize Firebase app with default name (not specifying name)
             firebase_admin.initialize_app(cred, {
                 'projectId': 'lexi-72330',
             })
-            print(f"✅ Firebase initialized with default app")
+            print("✅ Firebase initialized (credentials from env)")
         else:
-            print(f"✅ Firebase already initialized")
+            print("✅ Firebase already initialized")
+
+    @staticmethod
+    def _load_credentials(service_account_json: Optional[str] = None):
+        """Load Firebase credentials from env JSON string or local file path."""
+        json_content = (os.getenv("SERVICE_ACCOUNT_JSON_CONTENT") or "").strip()
+        if not json_content:
+            sa_env = (os.getenv("SERVICE_ACCOUNT_JSON") or "").strip()
+            if sa_env.startswith("{"):
+                json_content = sa_env
+
+        if json_content:
+            try:
+                return credentials.Certificate(json.loads(json_content))
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    "SERVICE_ACCOUNT_JSON_CONTENT is set but is not valid JSON. "
+                    "Paste the full service account file as one line, or use Render Secret Files."
+                ) from e
+
+        sa_path = (service_account_json or os.getenv("SERVICE_ACCOUNT_JSON") or "").strip()
+        if not sa_path:
+            raise ValueError(
+                "Missing Firebase credentials. On Render set SERVICE_ACCOUNT_JSON_CONTENT "
+                "to the full JSON from your Firebase service account file."
+            )
+        if not os.path.isabs(sa_path):
+            sa_path = os.path.join(os.path.dirname(__file__), sa_path)
+        if not os.path.isfile(sa_path):
+            raise FileNotFoundError(
+                f"Firebase service account file not found: {sa_path}. "
+                "On Render, use SERVICE_ACCOUNT_JSON_CONTENT (paste full JSON), not a file path."
+            )
+        return credentials.Certificate(sa_path)
 
     def send_to_user(self, user: UserContext, body: str, title: Optional[str] = None, extra_data: Optional[dict] = None) -> Optional[str]:
         """

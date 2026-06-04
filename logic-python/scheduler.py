@@ -11,9 +11,22 @@ Usage:
 To stop: Ctrl+C
 """
 
+import os
 from datetime import datetime
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR
+
+if os.getenv("SERVICE_ACCOUNT_JSON_CONTENT", "").strip():
+    print("🔑 Firebase: SERVICE_ACCOUNT_JSON_CONTENT is set")
+elif (os.getenv("SERVICE_ACCOUNT_JSON") or "").strip().startswith("{"):
+    print("🔑 Firebase: using SERVICE_ACCOUNT_JSON as inline JSON")
+else:
+    print("⚠️  Firebase: SERVICE_ACCOUNT_JSON_CONTENT not set — will use local file path (fails on Render)")
 
 from services.research_service import research_service
 

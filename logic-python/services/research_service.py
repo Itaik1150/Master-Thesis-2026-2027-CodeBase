@@ -30,9 +30,8 @@ class ResearchService:
     
     def __init__(self):
         """Initialize research service"""
-        # Provide the correct service account file path
-        service_account_path = os.path.join(os.path.dirname(__file__), 'lexi-72330-firebase-adminsdk-fbsvc-49c2c6ee82.json')
-        self.fcm_service = FCMService(service_account_json=service_account_path, dry_run=False)
+        # Credentials: SERVICE_ACCOUNT_JSON_CONTENT on Render, or local JSON file via env/path
+        self.fcm_service = FCMService(dry_run=False)
         
         self.llm_service = ProactiveLogic()
     
