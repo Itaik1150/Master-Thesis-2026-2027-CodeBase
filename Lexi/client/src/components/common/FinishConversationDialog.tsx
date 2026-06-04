@@ -71,29 +71,35 @@ const FinishConversationDialog = ({ open, setIsOpen, questionnaireLink, form }) 
             ) : page === 2 && form ? (
                 <ConversationForm form={form} isPreConversation={false} handleDone={handleDoneSurvey} />
             ) : page === 3 || (!form && questionnaireLink) ? (
-                <>
-                    <DialogTitle>Thank you for completing the conversation</DialogTitle>
-                    <DialogContent>
-                        <DialogContentText color={'black'}>
-                            Your username is <b>{activeUser.username}</b>, continue with it in the rest of the
-                            study.
-                        </DialogContentText>
-                        {/* <a href={questionnaireLink} target="_blank" rel="noopener noreferrer">
-                            {questionnaireLink}
-                        </a> */}
-                    </DialogContent>
-                    <DialogActions sx={{ justifyContent: 'center', pb: 2 }}>
-                        <Button
-                            variant="contained"
-                            onClick={() => {
-                                navigate(`${Pages.EXPERIMENT.replace(':experimentId', experimentId)}`);
-                                setIsOpen(false);
-                            }}
-                        >
-                            Back to Home
-                        </Button>
-                    </DialogActions>
-                </>
+                <DialogContent
+                    sx={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        textAlign: 'center',
+                        gap: 3,
+                        py: 5,
+                        px: 4,
+                        minHeight: 220,
+                    }}
+                >
+                    <DialogContentText color={'black'} sx={{ fontSize: '1.1rem', fontWeight: 500 }}>
+                        Thank you for completing the conversation
+                    </DialogContentText>
+                    <DialogContentText color={'black'}>
+                        Your username is <b>{activeUser.username}</b>, continue with it in the rest of the study.
+                    </DialogContentText>
+                    <Button
+                        variant="contained"
+                        onClick={() => {
+                            navigate(`${Pages.EXPERIMENT.replace(':experimentId', experimentId)}`);
+                            setIsOpen(false);
+                        }}
+                    >
+                        Back to Home
+                    </Button>
+                </DialogContent>
             ) : null}
         </Dialog>
     );
