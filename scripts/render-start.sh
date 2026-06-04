@@ -7,9 +7,10 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "==> Starting proactive scheduler (logic-python) in background..."
+export PYTHONUNBUFFERED=1
 (
   cd "$ROOT/logic-python"
-  python scheduler.py || echo "⚠️  Scheduler stopped (see error above) — Lexi API keeps running."
+  python -u scheduler.py || echo "⚠️  Scheduler stopped (see error above) — Lexi API keeps running."
 ) &
 
 echo "==> Starting Lexi Node server (foreground)..."
