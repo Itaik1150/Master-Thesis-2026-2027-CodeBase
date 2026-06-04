@@ -182,6 +182,9 @@ class ConvesationsController {
 
         await conversationsService.finishConversation(conversationId, experimentId, isAdmin);
 
+        // Reset the proactive opener when the user finishes a conversation
+        this.resetProactivePromptOnInteraction(conversationId).catch(() => {});
+
         res.status(200).send();
     });
 
