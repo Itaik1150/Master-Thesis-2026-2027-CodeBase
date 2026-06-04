@@ -686,6 +686,39 @@ class ResearchService:
         finally:
             mongodb_client.disconnect()
 
+    def _reset_first_chat_sentence(self, user: dict) -> None:
+        """
+        Restore user.agent.firstChatSentence to the canonical value from the
+        agents collection, clearing the proactive override written by inject_prompt.
+        Called after _create_conversation (success or failure) so the proactive
+        message is never re-used as the opener for manually-started conversations.
+        """
+        try:
+            agent = user.get("agent") or {}
+            agent_id = agent.get("_id")
+            if not agent_id:
+                return
+            if not mongodb_client.connect():
+                return
+            canonical = mongodb_client.db["agents"].find_one(
+                {"_id": ObjectId(str(agent_id))},
+                {"firstChatSentence": 1},
+            )
+            if not canonical:
+                return
+            original = canonical.get("firstChatSentence", "")
+            mongodb_client.db[mongodb_client.users_collection].update_one(
+                {"_id": ObjectId(str(user["_id"]))},
+                {"$set": {"agent.firstChatSentence": original}},
+            )
+        except Exception as e:
+            print(f"⚠️  _reset_first_chat_sentence failed: {e}")
+        finally:
+            try:
+                mongodb_client.disconnect()
+            except Exception:
+                pass
+
     def _create_conversation(self, user_id: str, experiment_id: str, num_conversations: int) -> Optional[str]:
         """
         Pre-creates a conversation on the Lexi server so we can send its ID
@@ -951,6 +984,11 @@ class ResearchService:
                     print(f"📝 Pre-created conversation {conversation_id} for {username}")
                 else:
                     print(f"⚠️  Could not pre-create conversation for {username} — FCM will open home screen")
+
+                # Step 2b: Restore the original firstChatSentence from the agents
+                # collection so manually-started conversations get the default
+                # greeting, not the proactive override.
+                self._reset_first_chat_sentence(user)
 
                 # Step 3: Send FCM.  Include conversationId + experimentId so the
                 # Android app can deep-link directly into the conversation.
