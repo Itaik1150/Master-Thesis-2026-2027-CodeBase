@@ -12,6 +12,7 @@ To stop: Ctrl+C
 """
 
 import os
+import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -22,14 +23,30 @@ load_dotenv()
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR
 
-if os.getenv("SERVICE_ACCOUNT_JSON_CONTENT", "").strip():
-    print("🔑 Firebase: SERVICE_ACCOUNT_JSON_CONTENT is set")
-elif (os.getenv("SERVICE_ACCOUNT_JSON") or "").strip().startswith("{"):
-    print("🔑 Firebase: using SERVICE_ACCOUNT_JSON as inline JSON")
-else:
-    print("⚠️  Firebase: SERVICE_ACCOUNT_JSON_CONTENT not set — will use local file path (fails on Render)")
+def _has_firebase_credentials() -> bool:
+    if os.getenv("SERVICE_ACCOUNT_JSON_CONTENT", "").strip():
+        return True
+    if (os.getenv("SERVICE_ACCOUNT_JSON") or "").strip().startswith("{"):
+        return True
+    for path in (
+        "/etc/secrets/firebase.json",
+        "/etc/secrets/service_account.json",
+        "/etc/secrets/SERVICE_ACCOUNT_JSON_CONTENT",
+    ):
+        if os.path.isfile(path):
+            return True
+    return False
 
-from services.research_service import research_service
+
+if _has_firebase_credentials():
+    print("🔑 Firebase credentials detected")
+else:
+    print("❌ Firebase: no credentials found.")
+    print("   On Render → Environment → add SERVICE_ACCOUNT_JSON_CONTENT")
+    print("   (paste full JSON from lexi-72330-firebase-adminsdk-....json)")
+    sys.exit(1)
+
+from services.research_service import get_research_service
 
 # ── Configuration ────────────────────────────────────────────────────────────
 # Times to fire (24-hour clock, Jerusalem time).
@@ -58,7 +75,7 @@ def proactive_job():
         return
 
     try:
-        result = research_service.run_full_proactive_cycle()
+        result = get_research_service().run_full_proactive_cycle()
         if result.get("success"):
             r = result.get("results", {})
             print(f"✅ Cycle done — FCM sent: {r.get('fcm_sent', 0)}, injected: {r.get('injected', 0)}")
@@ -86,7 +103,7 @@ if __name__ == "__main__":
     print("🗓️  Lexi Proactive Scheduler")
     print(f"   Fire times : {', '.join(FIRE_TIMES)} (Jerusalem time)")
     print(f"   Time window: {WINDOW_START_HOUR}:00 – {WINDOW_END_HOUR}:00")
-    print(f"   Daily cap  : {research_service.__class__.__module__}.MAX_DAILY_NOTIFICATIONS")
+    print(f"   Daily cap  : see DAILY_MESSAGE_LIMIT env var")
     print("   Press Ctrl+C to stop.")
     print("=" * 55)
 

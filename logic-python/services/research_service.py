@@ -1174,5 +1174,22 @@ class ResearchService:
                 "error": str(e)
             }
 
-# Singleton instance
-research_service = ResearchService()
+_instance: Optional["ResearchService"] = None
+
+
+def get_research_service() -> "ResearchService":
+    """Lazy singleton — avoids Firebase init at import time (important on Render)."""
+    global _instance
+    if _instance is None:
+        _instance = ResearchService()
+    return _instance
+
+
+class _LazyResearchService:
+    """Backward-compatible module-level `research_service` for scripts/tests."""
+
+    def __getattr__(self, name):
+        return getattr(get_research_service(), name)
+
+
+research_service = _LazyResearchService()

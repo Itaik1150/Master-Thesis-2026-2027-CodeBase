@@ -18,7 +18,16 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# If either process exits, stop the service (Render will restart)
+# If scheduler crashes on startup (e.g. missing Firebase env), keep Lexi API running
+sleep 3
+if ! kill -0 "$PY_PID" 2>/dev/null; then
+  echo "⚠️  Scheduler failed to start — Lexi API continues."
+  echo "    Fix: Render → Environment → SERVICE_ACCOUNT_JSON_CONTENT (full Firebase JSON)"
+  wait "$NODE_PID"
+  exit $?
+fi
+
+# If either process exits later, restart the whole service
 wait -n "$NODE_PID" "$PY_PID"
 EXIT_CODE=$?
 cleanup

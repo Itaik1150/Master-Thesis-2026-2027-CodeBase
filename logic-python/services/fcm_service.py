@@ -60,6 +60,15 @@ class FCMService:
                     "Paste the full service account file as one line, or use Render Secret Files."
                 ) from e
 
+        # Render Secret Files are mounted under /etc/secrets/
+        for secret_path in (
+            "/etc/secrets/firebase.json",
+            "/etc/secrets/service_account.json",
+            "/etc/secrets/SERVICE_ACCOUNT_JSON_CONTENT",
+        ):
+            if os.path.isfile(secret_path):
+                return credentials.Certificate(secret_path)
+
         sa_path = (service_account_json or os.getenv("SERVICE_ACCOUNT_JSON") or "").strip()
         if not sa_path:
             raise ValueError(
