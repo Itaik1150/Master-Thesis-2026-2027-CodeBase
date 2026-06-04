@@ -28,10 +28,8 @@ const FinishConversationDialog = ({ open, setIsOpen, questionnaireLink, form }) 
     const handleYes = () => {
         if (form) {
             setPage(2);
-        } else if (questionnaireLink) {
-            setPage(3);
-            handleDone();
         } else {
+            setPage(3);
             handleDone();
         }
     };
@@ -84,18 +82,17 @@ const FinishConversationDialog = ({ open, setIsOpen, questionnaireLink, form }) 
                             {questionnaireLink}
                         </a> */}
                     </DialogContent>
-                    {activeUser.isAdmin && (
-                        <DialogActions>
-                            <Button
-                                onClick={() => {
-                                    navigate(`${Pages.EXPERIMENT.replace(':experimentId', experimentId)}`);
-                                    setIsOpen(false);
-                                }}
-                            >
-                                Done
-                            </Button>
-                        </DialogActions>
-                    )}
+                    <DialogActions>
+                        <Button
+                            variant="contained"
+                            onClick={() => {
+                                navigate(`${Pages.EXPERIMENT.replace(':experimentId', experimentId)}`);
+                                setIsOpen(false);
+                            }}
+                        >
+                            Back to Home
+                        </Button>
+                    </DialogActions>
                 </>
             ) : null}
         </Dialog>
