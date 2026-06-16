@@ -604,12 +604,43 @@ class ResearchService:
         inspected in MongoDB Atlas and reused across cycles.
 
         Caller must hold an open MongoDB connection.
+        Uses flattened $set for all fields and $push with $each for emotional_memories
+        to avoid MongoDB path conflicts.
         """
         try:
-            memory_with_ts = {**memory, "last_updated": datetime.now(timezone.utc)}
+            emotional_memories = memory.pop("emotional_memories", [])
+            now_utc = datetime.now(timezone.utc)
+            
+            # Flatten $set to avoid "Updating the path 'proactiveMemory' would create a conflict" error.
+            # MongoDB requires setting individual nested fields, not the parent, when using $push on a sibling.
+            set_doc = {
+                "proactiveMemory.interests": memory.get("interests", []),
+                "proactiveMemory.future_mentions": memory.get("future_mentions", []),
+                "proactiveMemory.conversation_insight": memory.get("conversation_insight", ""),
+                "proactiveMemory.sensitivity_score": memory.get("sensitivity_score", 1),
+                "proactiveMemory.demographics": memory.get("demographics", {}),
+                "proactiveMemory.topics_sent_recently": memory.get("topics_sent_recently", []),
+                "proactiveMemory.preferred_language": memory.get("preferred_language", "he"),
+                "proactiveMemory.fired_temporal_mentions": memory.get("fired_temporal_mentions", []),
+                "proactiveMemory.pending_affective_followup": memory.get("pending_affective_followup"),
+                "proactiveMemory.last_affective_analyzed_msg_count": memory.get("last_affective_analyzed_msg_count"),
+                "proactiveMemory.open_intents": memory.get("open_intents", []),
+                "proactiveMemory.pending_gap_followup": memory.get("pending_gap_followup"),
+                "proactiveMemory.last_intent_scan_conversation_id": memory.get("last_intent_scan_conversation_id"),
+                "proactiveMemory.injected_prompt_original": memory.get("injected_prompt_original"),
+                "proactiveMemory.injected_prompt_reset_after": memory.get("injected_prompt_reset_after"),
+                "proactiveMemory.last_updated": now_utc,
+            }
+            
+            update_doc = {"$set": set_doc}
+            
+            # Append new emotional memories instead of replacing
+            if emotional_memories:
+                update_doc["$push"] = {"proactiveMemory.emotional_memories": {"$each": emotional_memories}}
+            
             result = mongodb_client.db[mongodb_client.users_collection].update_one(
                 {"_id": ObjectId(user_id)},
-                {"$set": {"proactiveMemory": memory_with_ts}},
+                update_doc,
             )
             return result.matched_count > 0
         except Exception as e:
@@ -924,6 +955,8 @@ class ResearchService:
             # would read stale state — e.g. future_mentions saved this cycle would be
             # invisible to temporal.evaluate(), and pending followups written by the
             # scans would be missed entirely.
+            # ALSO: Update the in-memory `memory` dict so generate_affective_default()
+            # sees fresh emotional_memories from the heuristic scans.
             try:
                 if mongodb_client.connect():
                     fresh_doc = mongodb_client.db[mongodb_client.users_collection].find_one(
@@ -931,7 +964,11 @@ class ResearchService:
                         {"proactiveMemory": 1},
                     )
                     if fresh_doc:
-                        user = {**user, "proactiveMemory": fresh_doc.get("proactiveMemory") or {}}
+                        fresh_pm = fresh_doc.get("proactiveMemory") or {}
+                        user = {**user, "proactiveMemory": fresh_pm}
+                        # Also update the in-memory memory dict to prevent stale data
+                        # from being used by generate_affective_default()
+                        memory.update(fresh_pm)
             except Exception as e:
                 print(f"⚠️  Could not reload proactiveMemory for {username}: {e}")
             finally:
