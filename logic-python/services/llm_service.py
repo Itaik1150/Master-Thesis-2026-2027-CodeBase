@@ -240,7 +240,7 @@ class ProactiveLogic:
         """
         try:
             # Real OpenAI API call
-            system_prompt = """You are a social interaction assistant for an Israeli research experiment. Evaluate if this news headline can be used to start a friendly conversation in Hebrew.
+            system_prompt = """You are a social interaction assistant. Evaluate if this news headline can be used to start a friendly conversation in Hebrew.
 
 Rules:
 - If the headline is suitable for a friendly conversation, return a short, proactive message in Hebrew (max 15 words)
@@ -296,7 +296,8 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
             {
                 "interests": List[str],
                 "future_mentions": List[Dict],   # [{"text": str, "when_iso": str|None}]
-                "conversation_insight": str
+                "conversation_insight": str,
+                "sensitivity_score": int         # 1-10 scale for emotional expressions
             }
         On any failure (network/JSON/parse), returns the same shape with empty values
         so the caller can merge it safely.
@@ -305,7 +306,7 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
         "next week", "in 2 hours" into absolute ISO 8601 datetimes. If empty,
         falls back to current local time.
         """
-        empty = {"interests": [], "future_mentions": [], "conversation_insight": ""}
+        empty = {"interests": [], "future_mentions": [], "conversation_insight": "", "sensitivity_score": 1, "emotional_memories": []}
         if not user_messages:
             return empty
 
@@ -315,7 +316,7 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
         today_label = today_iso or datetime.now().isoformat(timespec="minutes")
         insight_lang_label = "Hebrew" if language == "he" else "English"
         system_prompt = (
-            "You analyze conversation history for a research assistant.\n"
+            "You analyze conversation history for a conversational assistant.\n"
             f"Today is {today_label}. Use this to resolve relative dates like "
             "'today', 'tomorrow', 'in 2 hours', 'next week', etc.\n\n"
             "From the user's messages, extract:\n"
@@ -326,9 +327,18 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
             "  Resolve all relative dates against today. Use null for when_iso ONLY if the\n"
             "  user truly gave no usable timing. Always prefer a concrete ISO datetime when possible.\n"
             f"- conversation_insight: ONE short sentence in {insight_lang_label} summarizing\n"
-            "  their communication style and personality.\n\n"
-            "Return ONLY valid JSON with exactly these keys: interests, future_mentions, conversation_insight.\n"
-            "If a field has no signal, return an empty list or empty string."
+            "  their communication style and personality.\n"
+            "- sensitivity_score: integer from 1-10 rating how much emotional expression,\n"
+            "  sensitive topics, or personal struggles are present (1=neutral/factual, 10=highly emotional).\n"
+            "- emotional_memories: array of objects for deep personal/emotional shares, each with:\n"
+            '    {"content": "<exact quote or paraphrase of the emotional/personal share>",\n'
+            '     "affective_score": <1-10 rating of depth/relevance to inner emotional world>,\n'
+            f'     "timestamp_iso": "<{today_label} for when this was shared>",\n'
+            '     "used": false}\n'
+            "  Only include genuine emotional expressions, personal struggles, meaningful life events,\n"
+            "  or vulnerable shares. Exclude casual mentions or surface-level topics.\n\n"
+            "Return ONLY valid JSON with exactly these keys: interests, future_mentions, conversation_insight, sensitivity_score, emotional_memories.\n"
+            "If a field has no signal, return an empty list, empty string, or 1 for sensitivity_score."
         )
         user_prompt = f"User messages (most recent last):\n{joined}"
 
@@ -356,10 +366,25 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
                 elif isinstance(item, str) and item.strip():
                     normalized_future.append({"text": item.strip(), "when_iso": None})
 
+            # Normalize emotional_memories to ensure proper structure
+            normalized_emotional: List[Dict[str, Any]] = []
+            for item in parsed.get("emotional_memories", []) or []:
+                if isinstance(item, dict):
+                    content = (item.get("content") or "").strip()
+                    if content:
+                        normalized_emotional.append({
+                            "content": content,
+                            "affective_score": max(1, min(10, int(item.get("affective_score", 1)))),
+                            "timestamp_iso": item.get("timestamp_iso") or today_label,
+                            "used": False,  # Always initialize as unused
+                        })
+
             return {
                 "interests": parsed.get("interests", []) or [],
                 "future_mentions": normalized_future,
                 "conversation_insight": parsed.get("conversation_insight", "") or "",
+                "sensitivity_score": max(1, min(10, int(parsed.get("sensitivity_score", 1)))),  # Clamp to 1-10
+                "emotional_memories": normalized_emotional,
             }
         except json.JSONDecodeError as e:
             print(f"⚠️  extract_user_memory: invalid JSON from LLM: {e}")
@@ -430,93 +455,90 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
 
         return tags
 
-    def personalize_message_for_user(self, candidate_message: str, memory: Dict) -> str:
+    def personalize_from_context(self, ctx, framing: str = "standard") -> str:
         """
-        3.4d: Rewrite a candidate conversation starter to feel personal for this user.
+        Context-isolated personalization (see PROACTIVE_NOTIFICATIONS.md § 3a).
 
-        Uses (when available):
-          - demographics.name (subtle — never spammy)
-          - interests, future_mentions (with time tags), conversation_insight
-          - preferred_language ("he" or "en")
+        Builds the prompt using ONLY the fields carried in the winning heuristic's
+        NudgeContext — never the full proactiveMemory — so unrelated signals can't
+        bleed into the message.
 
-        Returns the personalized sentence. On any LLM failure, returns the original
-        candidate_message so the cycle never breaks.
+        `framing`:
+          - "standard": confident, concise opener (current behavior).
+          - "ethical":  epistemic-humility framing — added in Step 3 (see § 3b).
+            Until then, "ethical" falls through to the standard prompt.
+
+        Returns the personalized sentence, or ctx.seed_message on any LLM failure.
         """
-        if not candidate_message:
-            return ""
-
-        demo = memory.get("demographics", {}) or {}
-        name = demo.get("name", "") or ""
-        interests = memory.get("interests", []) or []
-        future_mentions = memory.get("future_mentions", []) or []
-        insight = memory.get("conversation_insight", "") or ""
-        language = memory.get("preferred_language", "he")
+        seed = (getattr(ctx, "seed_message", "") or "")
+        payload = getattr(ctx, "payload", {}) or {}
+        name = getattr(ctx, "name", "") or ""
+        trigger = getattr(ctx, "trigger_source", "topic")
+        language = getattr(ctx, "preferred_language", "he")
         target_lang = "Hebrew" if language == "he" else "English"
 
-        future_tags = self._tag_future_mentions(future_mentions, datetime.now())
+        self._last_personalization_focus = trigger  # exposed for logging
 
-        # Pick a primary focus for THIS message via weighted random.
-        # Goal: variety across cycles instead of always favoring the same signal.
-        # Future mentions still slightly preferred when they exist, but interests
-        # and the seed (news/topic) get real share of voice.
-        options: List[str] = []
-        weights: List[float] = []
-        if future_tags:
-            options.append("future")
-            weights.append(2.0)
-        if interests:
-            options.append("interest")
-            weights.append(1.5)
-        options.append("seed")
-        weights.append(1.0)
-        primary_focus = random.choices(options, weights=weights, k=1)[0]
-        self._last_personalization_focus = primary_focus  # exposed for logging
-
-        focus_instructions = {
-            "future": (
-                "Pick exactly ONE future mention and react per its time tag:\n"
-                "   - UPCOMING (within 30 days): ask warmly if they're ready, excited, when it is.\n"
-                "   - PAST (within last 7 days): ask how it went or what it was like.\n"
-                "   - FAR-FUTURE: mention it casually as something to look forward to.\n"
-                "   - UNKNOWN timing: ask gently about their plans for it."
-            ),
-            "interest": (
-                "Pick ONE of the listed interests and ask a fresh open question about it.\n"
-                "   You may casually nod to a future mention if it fits, but don't make it the focus."
-            ),
-            "seed": (
-                "Take the seed message as inspiration. Rewrite it in the user's voice/style.\n"
-                "   Stay close to the seed's topic — don't substitute future mentions or interests for it."
-            ),
-        }
+        # ── Build a focused instruction + details strictly from ctx.payload ──
+        if trigger == "affective":
+            focus = (
+                "Send a warm, gentle emotional check-in. Acknowledge how they seemed "
+                "without being dramatic or clinical. Invite them to share how they feel now."
+            )
+            details = (
+                f"OBSERVED EMOTION: {payload.get('emotion', 'unspecified')}\n"
+                f"COMMUNICATION STYLE: {payload.get('insight') or 'unknown'}"
+            )
+        elif trigger == "behavioural_gap":
+            focus = (
+                "Gently ask how the plan they mentioned went. Do NOT assume it "
+                "succeeded or failed. Keep it light and supportive."
+            )
+            details = f"PLAN THEY MENTIONED: {payload.get('intent_text', '')}"
+        elif trigger == "temporal":
+            focus = (
+                "React to the event. If it is ahead, ask warmly if they're ready or "
+                "excited; if it just passed, ask how it went. Never confuse the timing."
+            )
+            details = (
+                f"EVENT: {payload.get('mention_text', '')}\n"
+                f"HOURS UNTIL EVENT (negative = already passed): {payload.get('hours_until')}"
+            )
+        else:  # topic — personalize using ONLY the selected pool topic + seed
+            topic = (payload.get("topic_label") or getattr(ctx, "topic_label", "") or "").strip()
+            self._last_personalization_focus = f"topic:{topic}" if topic else "topic"
+            focus = (
+                f"Rewrite the seed as a warm, personal opener about ONLY this topic: "
+                f"\"{topic}\". You may use the user's name once. "
+                f"Stay on the seed's angle within that single topic."
+            )
+            details = f"SELECTED TOPIC (the only subject allowed): {topic or 'unknown'}"
 
         system_prompt = (
-            f"You write a short personal conversation starter in {target_lang} for a research assistant.\n\n"
-            f"PRIMARY FOCUS for this message: {primary_focus.upper()}\n"
-            f"{focus_instructions[primary_focus]}\n\n"
+            f"You write a short personal conversation starter in {target_lang} for a conversational assistant.\n\n"
+            f"FOCUS: {focus}\n\n"
             "HARD RULES (always apply):\n"
             f"- Output MUST be in {target_lang}.\n"
             "- Maximum 15 words.\n"
             "- Friendly and open-ended (must invite a reply).\n"
-            "- Match the user's communication style described in the insight.\n"
             "- You MAY use the user's name once if it feels natural; otherwise don't.\n"
-            "- NEVER ask about a PAST event as if it were upcoming, or vice versa.\n"
             "- Do NOT mention age or gender.\n"
             "- Do NOT add quotes, labels, prefixes, or explanations.\n"
             "- Return ONLY the final sentence."
         )
+        if trigger == "topic":
+            system_prompt += (
+                "\n\nTOPIC-ONLY RULES (critical):\n"
+                "- You have NO access to the user's other interests, plans, weddings, or past chats.\n"
+                "- Do NOT introduce any subject except the SELECTED TOPIC and what is already in the SEED.\n"
+                "- If the seed is about technology, the output must stay about technology — never pivot "
+                "to weddings, health, family, or any other theme."
+            )
 
-        future_block = (
-            "\n".join(f"  - {t}" for t in future_tags) if future_tags else "  (none)"
-        )
         user_payload = (
-            "FUTURE MENTIONS:\n"
-            f"{future_block}\n"
-            f"INTERESTS: {', '.join(interests) if interests else 'none'}\n"
-            f"COMMUNICATION STYLE INSIGHT: {insight or 'unknown'}\n"
+            f"{details}\n"
             f"USER NAME: {name or 'unknown'}\n"
-            f"SEED MESSAGE: {candidate_message}\n"
-            f"PRIMARY FOCUS for this message: {primary_focus}"
+            f"SEED MESSAGE: {seed}"
         )
 
         msgs_payload = [
@@ -524,19 +546,20 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
             {"role": "user",   "content": user_payload},
         ]
         try:
-            text = self._call_llm(msgs_payload, temperature=0.7, max_tokens=80)
+            temp = 0.35 if trigger == "topic" else 0.7
+            text = self._call_llm(msgs_payload, temperature=temp, max_tokens=80)
             # Strip wrapping quotes the model sometimes adds
             if (text.startswith('"') and text.endswith('"')) or (
                 text.startswith("'") and text.endswith("'")
             ):
                 text = text[1:-1].strip()
-            return text or candidate_message
+            return text or seed
         except requests.exceptions.RequestException as e:
-            print(f"❌ personalize_message_for_user: network error: {e}")
-            return candidate_message
+            print(f"❌ personalize_from_context: network error: {e}")
+            return seed
         except Exception as e:
-            print(f"❌ personalize_message_for_user: unexpected error: {e}")
-            return candidate_message
+            print(f"❌ personalize_from_context: unexpected error: {e}")
+            return seed
 
     def analyze_conversation_emotion(
         self,
@@ -568,8 +591,8 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
         joined = "\n".join(f"- {m}" for m in messages if m)
 
         system_prompt = (
-            "You are analyzing conversation messages from a research participant "
-            "for academic purposes — not clinical use.\n\n"
+            "You are analyzing conversation messages from a user "
+            "to understand their emotional state.\n\n"
             "From the messages, assess:\n"
             "- primary_emotion: the dominant emotion "
             "(stressed, anxious, sad, frustrated, angry, happy, neutral).\n"
@@ -624,7 +647,7 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
         joined = "\n".join(f"- {m}" for m in messages[-30:] if m)
 
         system_prompt = (
-            "You analyze conversation messages from a research participant.\n"
+            "You analyze conversation messages from a user.\n"
             "Extract only EXPLICIT, concrete plans or commitments the user expressed.\n\n"
             "Valid examples:\n"
             "  - 'I'll go to the gym tomorrow'\n"
@@ -681,7 +704,7 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
         joined = "\n".join(f"- {m}" for m in recent_messages[-30:] if m)
 
         system_prompt = (
-            f"A research participant previously intended to: '{intent_text}'.\n\n"
+            f"A user previously intended to: '{intent_text}'.\n\n"
             "Based on their recent messages, determine whether they followed through:\n"
             "- outcome: 'positive' if they mentioned doing it or completing it\n"
             "- outcome: 'negative' if they explicitly mentioned NOT doing it or cancelling\n"
@@ -721,8 +744,7 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
             {
                 "role": "system",
                 "content": (
-                    "You are a social interaction assistant for a research experiment at "
-                    "Ben-Gurion University (BGU). "
+                    "You are a conversational assistant. "
                     "Generate a short, friendly, open-ended conversation starter in Hebrew (max 15 words) "
                     "about the given topic. The message should feel natural and invite a response. "
                     "Return ONLY the Hebrew sentence, nothing else."

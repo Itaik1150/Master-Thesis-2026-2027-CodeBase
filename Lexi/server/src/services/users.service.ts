@@ -35,6 +35,10 @@ class UsersService {
             throw error;
         }
 
+        // Randomly assign user to one of three proactive groups
+        const groups: ('affective' | 'generic' | 'reactive')[] = ['affective', 'generic', 'reactive'];
+        const proactiveGroup = groups[Math.floor(Math.random() * groups.length)];
+
         const res = await UsersModel.create({
             experimentId,
             username,
@@ -45,6 +49,7 @@ class UsersService {
             childrenNumber,
             nativeEnglishSpeaker,
             agent,
+            proactiveGroup,
             fcmToken, // Include FCM token if provided
             isProactive: false, // Always start false, will be set in updateFCMToken if needed
         });

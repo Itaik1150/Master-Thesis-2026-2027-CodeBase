@@ -17,6 +17,7 @@ export interface IUser {
     password?: string;
     numberOfConversations: number;
     agent: IAgent;
+    proactiveGroup?: 'affective' | 'generic' | 'reactive';
     fcmToken?: string;
     fcmTokenUpdatedAt?: Date;
     isProactive?: boolean;

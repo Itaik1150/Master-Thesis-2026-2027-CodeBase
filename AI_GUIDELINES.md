@@ -69,14 +69,17 @@ Changes often affect more than one layer. Trace cross-component impact before ed
 
 ## Next task
 
-*(Write the next task here when starting a new session.)*
+**Proactive notifications refactor** (spec: `PROACTIVE_NOTIFICATIONS.md` § 3a, 3b, 5a, 6). Approved 5-step plan; implement one step at a time, stop for review after each.
 
-**Status:** Proactive pipeline is deployed on Render (Node + Python scheduler on one Starter instance). Notifications send automatically at scheduled times. Focus next work on notification quality — use `PROACTIVE_NOTIFICATIONS.md` as the working document.
+- [x] **Step 1 — Backend Context Isolation:** one heuristic wins → `personalize_from_context(ctx)` receives an isolated `NudgeContext` slice, never the full `proactiveMemory`. (`core/models.py`, `services/llm_service.py`, `services/research_service.py`)
+- [ ] **Step 2 — DB + dashboard flag `useEthicalFraming`** (default false).
+- [ ] **Step 3 — Prompt fork:** standard vs epistemic-humility (humility + heuristic transparency + invite correction).
+- [ ] **Step 4 — Scheduler jitter** `FIRE_JITTER_MINUTES` (default 30).
+- [ ] **Step 5 — Telemetry:** `sent_at`, `opened_at`, `first_user_message_at`, `framing` in `proactive_logs`.
 
-**Suggested next steps (from backlog):**
-- Wire dashboard `frequency` to scheduler (or document as UI-only until implemented).
-- Phase 5 dashboard: notification log, test-push button.
-- Phase 7: analytics (open rate, time to first reply).
+Out of scope for now: Calendar integration.
+
+
 
 ---
 

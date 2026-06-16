@@ -22,6 +22,7 @@ from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
 from services.llm_service import ProactiveLogic
 from heuristics import temporal, affective, behavioural_gap
+from core.models import NudgeContext
 
 class ResearchService:
     """
@@ -216,10 +217,12 @@ class ResearchService:
 
             # Step 3: fetch only users who are explicitly marked proactive=true.
             # Users set to false (e.g. via dashboard toggle) are excluded.
+            # Also exclude users in the 'reactive' proactive group (no notifications).
             proactive_users = list(mongodb_client.db[mongodb_client.users_collection].find({
                 "experimentId": {"$in": id_variants},
                 "fcmToken": {"$exists": True, "$ne": ""},
                 "isProactive": True,
+                "proactiveGroup": {"$ne": "reactive"},  # Exclude reactive group
             }))
 
             print(f"📊 Found {len(proactive_users)} proactive users with FCM tokens "
@@ -630,46 +633,38 @@ class ResearchService:
         print(f"🎯 Selected [{chosen['source']}:{chosen['topic_label']}]")
         return chosen
 
-    def select_personalized_message(self, candidates: List[Dict], memory: Dict) -> Optional[Dict]:
+    def _personalize_context(self, ctx: NudgeContext) -> Dict:
         """
-        3.4d: Pick a candidate (using basic memory to avoid repeats), then rewrite
-        its message text via the LLM using the user's rich memory.
+        Strict Context Isolation (PROACTIVE_NOTIFICATIONS.md § 3a).
 
-        Falls back to the deterministic select_message_for_user when:
-          - memory has no rich signal (no interests / future_mentions / insight), or
-          - the LLM personalization call fails.
+        Takes the winning heuristic's isolated NudgeContext, runs the LLM
+        personalization on it (the LLM sees ONLY ctx — never the full
+        proactiveMemory), and returns the standard candidate dict shape used
+        downstream (inject / FCM / logging).
 
-        Always returns the same candidate dict shape, with `generated_message`
-        possibly replaced by the personalized version. The original is preserved
-        in `original_message` and a `personalized` boolean is added for logging.
+        On any LLM failure the seed_message is used verbatim, so the cycle never
+        breaks.
         """
-        chosen = self.select_message_for_user(candidates, memory)
-        if not chosen:
-            return None
+        seed = (ctx.seed_message or "").strip()
 
-        has_rich_signal = (
-            bool(memory.get("interests")) or
-            bool(memory.get("future_mentions")) or
-            bool(memory.get("conversation_insight"))
-        )
-        if not has_rich_signal:
-            return chosen
+        try:
+            text = self.llm_service.personalize_from_context(ctx)
+        except Exception as e:
+            print(f"❌ _personalize_context error: {e}")
+            text = seed
+        text = (text or seed).strip()
 
-        personalized_text = self.llm_service.personalize_message_for_user(
-            candidate_message=chosen.get("generated_message", ""),
-            memory=memory,
-        )
-        if not personalized_text or not personalized_text.strip():
-            return chosen
-
-        # Return a shallow copy so we don't mutate the shared candidate pool
-        result = dict(chosen)
-        result["original_message"] = chosen.get("generated_message", "")
-        result["generated_message"] = personalized_text.strip()
-        result["personalized"] = result["generated_message"] != result["original_message"]
-        # Surface which signal the LLM was told to focus on (for monitoring variety).
-        result["focus"] = getattr(self.llm_service, "_last_personalization_focus", None)
-        return result
+        return {
+            "trigger_source": ctx.trigger_source,
+            "source": ctx.source,
+            "topic_label": ctx.topic_label,
+            "generated_message": text,
+            "original_message": seed,
+            "personalized": bool(text) and text != seed,
+            "focus": ctx.trigger_source,
+            "timestamp": datetime.now(),
+            "llm_response": {},
+        }
 
     def get_proactive_users_with_rate_limit(self, cycle_id: str) -> List[Dict]:
         """Get proactive users, skipping those who already hit their daily notification cap."""
@@ -816,6 +811,7 @@ class ResearchService:
             user_id = str(user["_id"])
             username = user.get('username', 'Unknown')
             fcm_token = user["fcmToken"]
+            proactive_group = user.get('proactiveGroup', 'generic')  # Default to generic for existing users
 
             # ── Load experiment heuristic settings for this user ──────────────
             # Defaults: all heuristics ON, model = env-configured LLM
@@ -864,9 +860,24 @@ class ResearchService:
                     # last_analyzed_conversation_id) which are written by the
                     # heuristic modules themselves and must survive memory saves.
                     existing_pm = user.get("proactiveMemory") or {}
-                    for field in ("future_mentions", "interests", "conversation_insight"):
+                    for field in ("future_mentions", "interests", "conversation_insight", "emotional_memories"):
                         if not memory.get(field) and existing_pm.get(field):
                             memory[field] = existing_pm[field]
+                    
+                    # Special handling for emotional_memories: merge new with existing unused ones
+                    if memory.get("emotional_memories") and existing_pm.get("emotional_memories"):
+                        existing_unused = [mem for mem in existing_pm["emotional_memories"] if not mem.get("used", False)]
+                        new_memories = memory["emotional_memories"]
+                        # Combine and deduplicate by content
+                        seen_content = set()
+                        merged_memories = []
+                        for mem_list in [existing_unused, new_memories]:
+                            for mem in mem_list:
+                                content = mem.get("content", "").strip()
+                                if content and content not in seen_content:
+                                    merged_memories.append(mem)
+                                    seen_content.add(content)
+                        memory["emotional_memories"] = merged_memories
                     for field in (
                         "fired_temporal_mentions",
                         "pending_affective_followup",
@@ -934,6 +945,13 @@ class ResearchService:
                 f"open_intents={len(memory_pm.get('open_intents') or [])}"
             )
 
+            # ── Strict Context Isolation (PROACTIVE_NOTIFICATIONS.md § 3a) ──
+            # The ONE winning heuristic builds a self-contained NudgeContext
+            # carrying only the fields its message needs. The LLM never sees the
+            # full proactiveMemory, so unrelated signals can't bleed in.
+            name = (memory.get("demographics") or {}).get("name") or username
+            language = memory.get("preferred_language", "he")
+
             if affective_nudge:
                 print(
                     f"💛 Affective heuristic fired for {username}: "
@@ -943,18 +961,20 @@ class ResearchService:
                     f"The user seemed {affective_nudge.emotion} in their last "
                     f"conversation. Send a warm, gentle check-in in the user's language."
                 )
-                affective_candidate = {
-                    "trigger_source": "affective",
-                    "generated_message": seed,
-                    "source": "affective",
-                    "topic_label": "affective",
-                    "timestamp": datetime.now(),
-                    "llm_response": {},
-                }
-                # Strip future_mentions and interests so the LLM stays focused
-                # on the emotional seed and doesn't pivot to unrelated context.
-                emotion_memory = {**memory, "future_mentions": [], "interests": []}
-                message = self.select_personalized_message([affective_candidate], emotion_memory)
+                ctx = NudgeContext(
+                    trigger_source="affective",
+                    name=name,
+                    preferred_language=language,
+                    seed_message=seed,
+                    topic_label="affective",
+                    source="affective",
+                    payload={
+                        "emotion": affective_nudge.emotion,
+                        "intensity": affective_nudge.intensity,
+                        "insight": memory.get("conversation_insight", ""),
+                    },
+                )
+                message = self._personalize_context(ctx)
 
             elif gap_nudge:
                 print(
@@ -966,17 +986,16 @@ class ResearchService:
                     f"but hasn't mentioned it since. Ask gently how it went, "
                     f"in the user's language."
                 )
-                gap_candidate = {
-                    "trigger_source": "behavioural_gap",
-                    "generated_message": seed,
-                    "source": "behavioural_gap",
-                    "topic_label": "behavioural_gap",
-                    "timestamp": datetime.now(),
-                    "llm_response": {},
-                }
-                # Same: strip unrelated context so personalization stays on the intent.
-                intent_memory = {**memory, "future_mentions": [], "interests": []}
-                message = self.select_personalized_message([gap_candidate], intent_memory)
+                ctx = NudgeContext(
+                    trigger_source="behavioural_gap",
+                    name=name,
+                    preferred_language=language,
+                    seed_message=seed,
+                    topic_label="behavioural_gap",
+                    source="behavioural_gap",
+                    payload={"intent_text": gap_nudge.intent_text},
+                )
+                message = self._personalize_context(ctx)
 
             elif temporal_nudge:
                 print(
@@ -988,19 +1007,107 @@ class ResearchService:
                     f"The user mentioned '{temporal_nudge.mention_text}' "
                     f"is coming up in about {int(temporal_nudge.hours_until)} hours."
                 )
-                temporal_candidate = {
-                    "trigger_source": "temporal",
-                    "generated_message": seed,
-                    "source": "temporal",
-                    "topic_label": "temporal",
-                    "timestamp": datetime.now(),
-                    "llm_response": {},
-                }
-                message = self.select_personalized_message([temporal_candidate], memory)
+                ctx = NudgeContext(
+                    trigger_source="temporal",
+                    name=name,
+                    preferred_language=language,
+                    seed_message=seed,
+                    topic_label="temporal",
+                    source="temporal",
+                    payload={
+                        "mention_text": temporal_nudge.mention_text,
+                        "hours_until": round(temporal_nudge.hours_until, 1),
+                    },
+                )
+                message = self._personalize_context(ctx)
 
             else:
-                # ── Default: pick + personalize from topic pool ───────────────
-                message = self.select_personalized_message(candidates, memory)
+                # ── No heuristic fired: use existing topic-based logic (will be overridden by gatekeeper) ─
+                chosen = self.select_message_for_user(candidates, memory)
+                if chosen:
+                    ctx = NudgeContext(
+                        trigger_source="topic",
+                        name=name,
+                        preferred_language=language,
+                        seed_message=chosen.get("generated_message", ""),
+                        topic_label=chosen.get("topic_label", "topic"),
+                        source=chosen.get("source", "topic"),
+                        payload={"topic_label": chosen.get("topic_label", "topic")},
+                    )
+                    message = self._personalize_context(ctx)
+                else:
+                    message = None
+            
+            # ── GATEKEEPER: Proactive Group Safety Filter ────────────────────────────
+            # Respect which heuristics are on/off via dashboard, BUT apply final group override
+            
+            if proactive_group == 'reactive':
+                # Reactive group: NEVER send proactive notifications
+                print(f"🚫 [{username}] Reactive group - aborting proactive notification")
+                continue
+                
+            elif proactive_group == 'generic':
+                # Generic group: Override with standard assistant prompt (zero emotional weight)
+                print(f"🔄 [{username}] Generic group override - replacing with standard invitation")
+                seed = f"Hi {name}, I'm here if you'd like to chat today."
+                ctx = NudgeContext(
+                    trigger_source="generic_override",
+                    name=name,
+                    preferred_language=language,
+                    seed_message=seed,
+                    topic_label="generic_standard",
+                    source="generic",
+                    payload={"group": "generic"},
+                )
+                # Use personalize_from_context with generic framing
+                system_prompt = (
+                    f"You are a standard assistant. Generate a completely generic, "
+                    f"standard invitation to chat in {'Hebrew' if language == 'he' else 'English'} with zero emotional weight "
+                    f"and no specific topics (max 15 words). You MAY use the user's name once. "
+                    f"Return ONLY the final message."
+                )
+                user_prompt = f"USER NAME: {name}\n\nGenerate a friendly but neutral chat invitation."
+                
+                msgs = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+                try:
+                    generic_text = self.llm_service._call_llm(msgs, temperature=0.3, max_tokens=50)
+                    if (generic_text.startswith('"') and generic_text.endswith('"')):
+                        generic_text = generic_text[1:-1].strip()
+                    message = {
+                        "trigger_source": "generic_override",
+                        "source": "generic",
+                        "topic_label": "generic_standard", 
+                        "generated_message": generic_text or f"Hi {name}, how are you today?",
+                        "personalized": False,
+                    }
+                except Exception as e:
+                    print(f"⚠️ Generic override LLM error: {e}")
+                    message = {
+                        "trigger_source": "generic_override",
+                        "source": "generic", 
+                        "topic_label": "generic_standard",
+                        "generated_message": f"Hi {name}, how are you today?",
+                        "personalized": False,
+                    }
+                
+            elif proactive_group == 'affective':
+                # Affective group: Use affective heuristic for strict emotional framing
+                if not (affective_nudge or gap_nudge or temporal_nudge):
+                    # No heuristic fired - use affective default generator
+                    print(f"🧠 [{username}] Affective group - generating empathetic default")
+                    affective_result = affective.generate_affective_default(memory, name, user_id, self.llm_service, mongodb_client)
+                    message = {
+                        "trigger_source": affective_result["trigger_source"],
+                        "source": affective_result["source"],
+                        "topic_label": affective_result["topic_label"],
+                        "generated_message": affective_result["generated_message"],
+                        "personalized": affective_result["personalized"],
+                        "has_context": affective_result["has_context"],
+                    }
+                # If heuristic already fired, keep the existing message (already processed above)
             if not message:
                 print(f"⚠️  No candidate available for {username}, skipping")
                 continue
@@ -1008,7 +1115,7 @@ class ResearchService:
             tag = "✨personalized" if message.get("personalized") else "default"
             focus = message.get("focus")
             focus_str = f" focus={focus}" if focus else ""
-            print(f"\n👤 {username} → [{message['source']}:{message['topic_label']}] ({tag}{focus_str}) {message['generated_message']}")
+            print(f"\n👤 {username} [group:{proactive_group}] → [{message['source']}:{message['topic_label']}] ({tag}{focus_str}) {message['generated_message']}")
             if message.get("personalized"):
                 print(f"   ↪ original was: {message.get('original_message', '')}")
 
@@ -1074,7 +1181,7 @@ class ResearchService:
                         )
 
                     # Step 5: Log success
-                    self.log_proactive_event(cycle_id, user_id, message, "sent", notification_result)
+                    self.log_proactive_event(cycle_id, user_id, message, "sent", notification_result, proactive_group)
                 else:
                     results["fcm_failed"] += 1
                     print(f"❌ FCM failed for {username}")
@@ -1096,7 +1203,7 @@ class ResearchService:
 
         return results
     
-    def log_proactive_event(self, cycle_id: str, user_id: str, message: Dict, status: str, notification_id: str = None):
+    def log_proactive_event(self, cycle_id: str, user_id: str, message: Dict, status: str, notification_id: str = None, proactive_group: str = None):
         """Log proactive event for research analysis"""
         try:
             if not mongodb_client.connect():
@@ -1112,6 +1219,7 @@ class ResearchService:
                 "topic_label": message.get("topic_label", "general"),
                 "status": status,
                 "notification_id": notification_id,
+                "proactive_group": proactive_group,
                 "llm_response": message.get("llm_response", {})
             }
 

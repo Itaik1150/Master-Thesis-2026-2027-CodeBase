@@ -1,21 +1,22 @@
 """
-Affective Heuristic — Phase 4.4
+Affective Heuristic — Phase 4.4 + Task 2 Strict Emotional Framing
 
-Fires a gentle check-in when a user showed high emotional load
-(stress, sadness, frustration, anxiety) in their most recent conversations.
+Fires empathetic check-ins for users in the 'affective' proactive group.
 
 Two-step per cycle per user:
-  1. analyze_and_schedule() — reads the last N conversations (same approach as
-     extract_conversation_memory), collects all user messages, runs one LLM
-     emotion analysis, and writes a pending followup to MongoDB when
-     intensity >= INTENSITY_THRESHOLD.
+  1. analyze_and_schedule() — reads the last N conversations, runs emotion analysis,
+     and writes a pending followup when intensity >= INTENSITY_THRESHOLD.
   2. evaluate() — checks if a previously scheduled followup is now due.
      Returns an AffectiveNudge if it is, otherwise None.
+
+NEW: Strict Emotional Framing for Group 1 (Affective Proactive):
+  - generate_affective_default() — creates empathetic prompts based on sensitivity_score
+  - Cold Start: gentle emotional invitation when no high-sensitivity data exists
+  - Context-Rich: personalized check-in using highest sensitivity memories
 
 MongoDB fields used (all inside proactiveMemory):
   pending_affective_followup: {emotion, intensity, scheduled_for}
   last_affective_analyzed_msg_count: int — total user messages seen at last analysis.
-    Re-analysis is triggered whenever this count grows.
 """
 
 from __future__ import annotations
@@ -221,5 +222,152 @@ def clear_followup(user_id: str, mongodb_client) -> None:
         print(f"⚠️  affective.clear_followup error for {user_id}: {e}")
     finally:
         mongodb_client.disconnect()
+
+
+def generate_affective_default(user_memory: dict, user_name: str, user_id: str, llm_service, mongodb_client) -> dict:
+    """
+    Generate affective proactive notification for Group 1 (Affective Proactive).
+    
+    Strict Emotional Framing Rules:
+    1. Context-Rich: If unused emotional_memories exist, select the best one by 
+       affective_score (desc) then timestamp (desc), generate personalized check-in,
+       and mark it as used in MongoDB.
+    2. Cold Start: If no unused emotional memories, generate gentle emotional invitation
+       purely focused on emotional sharing with user's name.
+    
+    Args:
+        user_memory: proactiveMemory dict containing emotional_memories array
+        user_name: user's display name
+        user_id: user's MongoDB _id for DB updates
+        llm_service: ProactiveLogic instance for LLM calls
+        mongodb_client: MongoDB client for marking memories as used
+        
+    Returns:
+        dict with generated_message, topic_label, personalized flag
+    """
+    from bson import ObjectId
+    
+    preferred_language = user_memory.get('preferred_language', 'he')
+    target_lang = "Hebrew" if preferred_language == "he" else "English"
+    emotional_memories = user_memory.get('emotional_memories', [])
+    
+    # Filter to find unused emotional memories
+    unused_memories = [mem for mem in emotional_memories if not mem.get('used', False)]
+    
+    # Determine if we have unused emotional context for personalization
+    has_emotional_context = bool(unused_memories)
+    
+    if has_emotional_context:
+        # Context-Rich: Select best unused emotional memory and personalize
+        # Sort by affective_score (desc), then by timestamp_iso (desc for most recent)
+        best_memory = max(unused_memories, key=lambda m: (
+            m.get('affective_score', 1), 
+            m.get('timestamp_iso', '1900-01-01')
+        ))
+        
+        memory_content = best_memory.get('content', '')
+        affective_score = best_memory.get('affective_score', 1)
+        
+        system_prompt = (
+            f"You are an empathetic agent that encourages emotional sharing. "
+            f"Generate a warm, personal emotional check-in in {target_lang} (max 15 words) "
+            f"that directly references this specific emotional memory the user shared. "
+            f"Acknowledge their feelings without being dramatic or clinical. "
+            f"Invite them to share how they're feeling now about this or related topics. "
+            f"You MAY use the user's name once if it feels natural. "
+            f"Return ONLY the final message, no quotes or explanations."
+        )
+        
+        user_prompt = (
+            f"USER NAME: {user_name}\n"
+            f"SPECIFIC EMOTIONAL MEMORY: {memory_content}\n"
+            f"AFFECTIVE DEPTH: {affective_score}/10\n\n"
+            f"Craft a highly personalized empathetic check-in directly referencing "
+            f"this specific emotional memory. Show that you remember and care about "
+            f"what they shared."
+        )
+        
+        topic_label = "affective_context_rich"
+        
+        # Mark this memory as used in MongoDB
+        try:
+            if mongodb_client.connect():
+                mongodb_client.db[mongodb_client.users_collection].update_one(
+                    {
+                        "_id": ObjectId(user_id),
+                        "proactiveMemory.emotional_memories.content": memory_content
+                    },
+                    {
+                        "$set": {
+                            "proactiveMemory.emotional_memories.$.used": True
+                        }
+                    }
+                )
+                print(f"💛 Marked emotional memory as used for {user_name}: '{memory_content[:50]}...'")
+        except Exception as e:
+            print(f"⚠️ Failed to mark emotional memory as used for {user_id}: {e}")
+        finally:
+            try:
+                mongodb_client.disconnect()
+            except Exception:
+                pass
+        
+    else:
+        # Cold Start: Gentle emotional invitation with user's name
+        system_prompt = (
+            f"You are an empathetic agent that encourages emotional sharing. "
+            f"Generate a gentle, warm invitation in {target_lang} (max 15 words) "
+            f"purely focused on emotional sharing and being a listening ear. "
+            f"Use the user's name naturally. "
+            f"Return ONLY the final message, no quotes or explanations."
+        )
+        
+        user_prompt = (
+            f"USER NAME: {user_name}\n\n"
+            f"Generate a gentle emotional invitation that lets them know you're here "
+            f"if they need a listening ear today. Focus purely on emotional support."
+        )
+        
+        topic_label = "affective_cold_start"
+    
+    # Call LLM to generate the message
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    
+    try:
+        generated_message = llm_service._call_llm(messages, temperature=0.7, max_tokens=80)
+        
+        # Strip wrapping quotes if LLM added them
+        if (generated_message.startswith('"') and generated_message.endswith('"')) or (
+            generated_message.startswith("'") and generated_message.endswith("'")
+        ):
+            generated_message = generated_message[1:-1].strip()
+            
+        # Fallback if generation failed
+        if not generated_message:
+            if has_emotional_context:
+                generated_message = f"Hi {user_name}, I was thinking about what you shared earlier. How are you feeling about it now?"
+            else:
+                generated_message = f"Hi {user_name}, just checking in. I'm here if you need a listening ear today."
+                
+    except Exception as e:
+        print(f"❌ generate_affective_default LLM error: {e}")
+        # Safe fallback
+        if has_emotional_context:
+            generated_message = f"Hi {user_name}, I was thinking about what you shared earlier. How are you feeling about it now?"
+        else:
+            generated_message = f"Hi {user_name}, just checking in. I'm here if you need a listening ear today."
+    
+    return {
+        "generated_message": generated_message,
+        "topic_label": topic_label,
+        "personalized": has_emotional_context,
+        "trigger_source": "affective_default",
+        "source": "affective",
+        "has_context": has_emotional_context,
+        "selected_memory": best_memory.get('content', '') if has_emotional_context else '',
+    }
 
 
