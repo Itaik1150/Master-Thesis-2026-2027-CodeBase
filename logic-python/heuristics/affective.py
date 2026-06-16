@@ -143,8 +143,6 @@ def analyze_and_schedule(user: dict, mongodb_client, llm_service) -> None:
     if current_count == 0 or current_count <= last_count:
         return
 
-    print(f"   💛 affective: {current_count} msgs ({last_count}→{current_count}), analyzing...")
-
     # ── Phase B: LLM emotion analysis (outside DB connection) ─────────────────
     try:
         result = llm_service.analyze_conversation_emotion(all_user_texts[-20:], language)
@@ -154,7 +152,6 @@ def analyze_and_schedule(user: dict, mongodb_client, llm_service) -> None:
 
     intensity      = float(result.get("intensity", 0.0))
     needs_followup = result.get("needs_followup", False)
-    print(f"   💛 affective: {result.get('primary_emotion')} intensity={intensity:.2f} needs_followup={needs_followup}")
 
     # ── Phase C: Write result to MongoDB ──────────────────────────────────────
     try:
@@ -289,13 +286,13 @@ def generate_affective_default(user_memory: dict, user_name: str, user_id: str, 
         
         topic_label = "affective_context_rich"
         
-        # Mark this memory as used in MongoDB
+        # Mark this memory as used in MongoDB using positional operator
         try:
             if mongodb_client.connect():
-                mongodb_client.db[mongodb_client.users_collection].update_one(
+                result = mongodb_client.db[mongodb_client.users_collection].update_one(
                     {
                         "_id": ObjectId(user_id),
-                        "proactiveMemory.emotional_memories.content": memory_content
+                        "proactiveMemory.emotional_memories": {"$elemMatch": {"content": memory_content, "used": False}}
                     },
                     {
                         "$set": {
@@ -303,7 +300,10 @@ def generate_affective_default(user_memory: dict, user_name: str, user_id: str, 
                         }
                     }
                 )
-                print(f"💛 Marked emotional memory as used for {user_name}: '{memory_content[:50]}...'")
+                if result.modified_count > 0:
+                    print(f"💛 Marked emotional memory as used for {user_name}: '{memory_content[:50]}...'")
+                else:
+                    print(f"⚠️ Memory not found or already used for {user_name}")
         except Exception as e:
             print(f"⚠️ Failed to mark emotional memory as used for {user_id}: {e}")
         finally:

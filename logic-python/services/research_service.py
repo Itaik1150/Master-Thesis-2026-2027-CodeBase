@@ -504,7 +504,6 @@ class ResearchService:
                     "timestamp": datetime.now(),
                     "llm_response": {"should_send": True, "message": msg},
                 })
-        print(f"🎯 Pool ready: {len(candidates)} topic candidates")
         return candidates
 
     def build_basic_memory(self, user: Dict) -> Dict:
