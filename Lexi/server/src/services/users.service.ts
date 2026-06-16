@@ -51,7 +51,7 @@ class UsersService {
             agent,
             proactiveGroup,
             fcmToken, // Include FCM token if provided
-            isProactive: false, // Always start false, will be set in updateFCMToken if needed
+            isProactive: experiment.experimentFeatures?.proactiveSettings?.enabled ?? false,
         });
 
         // If FCM token was provided during registration, assign isProactive based on experiment settings
