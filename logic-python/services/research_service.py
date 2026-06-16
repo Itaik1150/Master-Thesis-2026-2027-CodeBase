@@ -533,6 +533,11 @@ class ResearchService:
         """
         3.4b: Read this user's last N conversations and run ONE LLM call to extract
         interests / future_mentions / conversation_insight.
+        
+        **NEW:** Only extracts emotional_memories from messages that haven't been 
+        analyzed yet (analyzed_for_memory != True). Marks those messages as 
+        analyzed_for_memory: True after successful extraction.
+        
         Also detects preferred_language from the message text (Hebrew vs Latin).
 
         Caller must hold an open MongoDB connection.
@@ -581,10 +586,14 @@ class ResearchService:
         hebrew_chars = sum(1 for c in combined if '\u05d0' <= c <= '\u05ea')
         preferred_language = "he" if hebrew_chars > len(combined) * 0.1 else "en"
 
+        # NEW: Call with unanalyzed_only=True to skip re-analyzing and mark as analyzed
         extracted = self.llm_service.extract_user_memory(
             all_user_messages,
             preferred_language,
             today_iso=datetime.now().isoformat(timespec="minutes"),
+            unanalyzed_only=True,
+            mongodb_client=mongodb_client,
+            user_id=user_id,
         )
         extracted["preferred_language"] = preferred_language
         return extracted

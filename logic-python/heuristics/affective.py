@@ -135,8 +135,6 @@ def analyze_and_schedule(user: dict, mongodb_client, llm_service) -> None:
     except Exception as e:
         print(f"⚠️  affective.analyze_and_schedule: DB read error for {user_id}: {e}")
         return
-    finally:
-        mongodb_client.disconnect()
 
     current_count = len(all_user_texts)
 
@@ -194,8 +192,6 @@ def analyze_and_schedule(user: dict, mongodb_client, llm_service) -> None:
 
     except Exception as e:
         print(f"⚠️  affective.analyze_and_schedule: DB write error for {user_id}: {e}")
-    finally:
-        mongodb_client.disconnect()
 
 
 def clear_followup(user_id: str, mongodb_client) -> None:
@@ -217,8 +213,6 @@ def clear_followup(user_id: str, mongodb_client) -> None:
         print(f"💛 Affective followup cleared for user {user_id}")
     except Exception as e:
         print(f"⚠️  affective.clear_followup error for {user_id}: {e}")
-    finally:
-        mongodb_client.disconnect()
 
 
 def generate_affective_default(user_memory: dict, user_name: str, user_id: str, llm_service, mongodb_client) -> dict:
@@ -226,11 +220,10 @@ def generate_affective_default(user_memory: dict, user_name: str, user_id: str, 
     Generate affective proactive notification for Group 1 (Affective Proactive).
     
     Strict Emotional Framing Rules:
-    1. Context-Rich: If unused emotional_memories exist, select the best one by 
-       affective_score (desc) then timestamp (desc), generate personalized check-in,
-       and mark it as used in MongoDB.
-    2. Cold Start: If no unused emotional memories, generate gentle emotional invitation
-       purely focused on emotional sharing with user's name.
+    1. **Expiration:** Mark any used: False memory older than 72 hours as used: True (expired).
+    2. **Selection:** Select the best unused emotional memory by affective_score (desc), timestamp (desc).
+    3. **Marking (Fixes Loop):** Once selected and used, mark THAT memory as used: True in MongoDB
+       using the positional operator ($) to update the exact array element.
     
     Args:
         user_memory: proactiveMemory dict containing emotional_memories array
@@ -243,20 +236,51 @@ def generate_affective_default(user_memory: dict, user_name: str, user_id: str, 
         dict with generated_message, topic_label, personalized flag
     """
     from bson import ObjectId
+    from datetime import datetime, timedelta, timezone
     
     preferred_language = user_memory.get('preferred_language', 'he')
     target_lang = "Hebrew" if preferred_language == "he" else "English"
     emotional_memories = user_memory.get('emotional_memories', [])
     
-    # Filter to find unused emotional memories
+    # STEP 1: Expiration — mark any unused memory older than 72 hours as used (expired)
+    now = datetime.now(timezone.utc)
+    expiry_threshold = now - timedelta(hours=72)
+    
+    if mongodb_client and emotional_memories:
+        try:
+            if mongodb_client.connect():
+                result = mongodb_client.db[mongodb_client.users_collection].update_many(
+                    {
+                        "_id": ObjectId(user_id),
+                        "proactiveMemory.emotional_memories": {
+                            "$elemMatch": {
+                                "used": False,
+                                "timestamp_iso": {"$lt": expiry_threshold.isoformat()}
+                            }
+                        }
+                    },
+                    {
+                        "$set": {
+                            "proactiveMemory.emotional_memories.$[elem].used": True
+                        }
+                    },
+                    array_filters=[{
+                        "elem.used": False,
+                        "elem.timestamp_iso": {"$lt": expiry_threshold.isoformat()}
+                    }]
+                )
+                if result.modified_count > 0:
+                    print(f"⏰ Expired {result.modified_count} stale emotional memories for {user_name}")
+        except Exception as e:
+            print(f"⚠️  Failed to expire old emotional memories: {e}")
+    
+    # STEP 2: Selection — find best unused emotional memory
     unused_memories = [mem for mem in emotional_memories if not mem.get('used', False)]
     
-    # Determine if we have unused emotional context for personalization
     has_emotional_context = bool(unused_memories)
     
     if has_emotional_context:
-        # Context-Rich: Select best unused emotional memory and personalize
-        # Sort by affective_score (desc), then by timestamp_iso (desc for most recent)
+        # Select best unused emotional memory by affective_score (desc), then timestamp (desc)
         best_memory = max(unused_memories, key=lambda m: (
             m.get('affective_score', 1), 
             m.get('timestamp_iso', '1900-01-01')
@@ -286,7 +310,8 @@ def generate_affective_default(user_memory: dict, user_name: str, user_id: str, 
         
         topic_label = "affective_context_rich"
         
-        # Mark this memory as used in MongoDB using positional operator
+        # STEP 3: Marking (Fixing the Loop) — mark THIS specific memory as used
+        # Use positional operator ($) to update the exact array element
         try:
             if mongodb_client.connect():
                 result = mongodb_client.db[mongodb_client.users_collection].update_one(
@@ -306,11 +331,6 @@ def generate_affective_default(user_memory: dict, user_name: str, user_id: str, 
                     print(f"⚠️ Memory not found or already used for {user_name}")
         except Exception as e:
             print(f"⚠️ Failed to mark emotional memory as used for {user_id}: {e}")
-        finally:
-            try:
-                mongodb_client.disconnect()
-            except Exception:
-                pass
         
     else:
         # Cold Start: Gentle emotional invitation with user's name

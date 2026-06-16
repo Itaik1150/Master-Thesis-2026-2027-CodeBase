@@ -289,6 +289,9 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
         user_messages: List[str],
         language: str = "he",
         today_iso: str = "",
+        unanalyzed_only: bool = False,
+        mongodb_client = None,
+        user_id: str = "",
     ) -> Dict[str, Any]:
         """
         3.4b: Extract structured insights from a user's past conversation messages.
@@ -298,19 +301,62 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
                 "future_mentions": List[Dict],   # [{"text": str, "when_iso": str|None}]
                 "conversation_insight": str,
                 "sensitivity_score": int         # 1-10 scale for emotional expressions
+                "emotional_memories": List[Dict] # Only NEWLY extracted (not previously analyzed)
             }
         On any failure (network/JSON/parse), returns the same shape with empty values
         so the caller can merge it safely.
 
-        `today_iso` is used so the LLM can resolve relative dates like "tomorrow",
-        "next week", "in 2 hours" into absolute ISO 8601 datetimes. If empty,
-        falls back to current local time.
+        `unanalyzed_only`: If True, only extracts emotional_memories from messages 
+        that haven't been analyzed yet (analyzed_for_memory != True).
+        After successful extraction, marks those messages with analyzed_for_memory: True.
         """
         empty = {"interests": [], "future_mentions": [], "conversation_insight": "", "sensitivity_score": 1, "emotional_memories": []}
         if not user_messages:
             return empty
 
         capped = user_messages[-60:]
+        
+        # STEP 1: Smart Extraction — if unanalyzed_only, fetch from DB messages not yet analyzed
+        if unanalyzed_only and mongodb_client and user_id:
+            try:
+                from bson import ObjectId
+                if not mongodb_client.connect():
+                    capped = user_messages[-60:]
+                else:
+                    # Fetch recent conversations where analyzed_for_memory != True
+                    recent_metas = list(mongodb_client.db["metadata_conversations"].find(
+                        {"userId": user_id},
+                        sort=[("createdAt", -1)],
+                        limit=5,  # Check last 5 conversations for unanalyzed messages
+                    ))
+                    
+                    unanalyzed_messages = []
+                    analyzed_msg_ids = []
+                    
+                    for meta in recent_metas:
+                        conv_id = str(meta["_id"])
+                        raw = list(mongodb_client.db["conversations"].find(
+                            {
+                                "conversationId": conv_id,
+                                "role": "user",
+                                "analyzed_for_memory": {"$ne": True},  # Only unanalyzed
+                            },
+                            sort=[("messageNumber", 1)],
+                        ))
+                        for msg in raw:
+                            if msg.get("content"):
+                                unanalyzed_messages.append(msg.get("content"))
+                                analyzed_msg_ids.append(msg["_id"])
+                    
+                    if not unanalyzed_messages:
+                        return empty  # Skip LLM call if no unanalyzed messages
+                    
+                    capped = unanalyzed_messages[-60:]
+                    
+            except Exception as e:
+                print(f"⚠️  unanalyzed_only fetch failed: {e}")
+                capped = user_messages[-60:]
+        
         joined = "\n".join(f"- {m}" for m in capped if m)
 
         today_label = today_iso or datetime.now().isoformat(timespec="minutes")
@@ -378,6 +424,21 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
                             "timestamp_iso": item.get("timestamp_iso") or today_label,
                             "used": False,  # Always initialize as unused
                         })
+
+            # STEP 2: Mark messages as analyzed AFTER successful LLM extraction
+            if unanalyzed_only and mongodb_client and user_id and 'analyzed_msg_ids' in locals():
+                try:
+                    if mongodb_client.connect():
+                        from bson import ObjectId
+                        for msg_id in analyzed_msg_ids:
+                            mongodb_client.db["conversations"].update_one(
+                                {"_id": ObjectId(msg_id)},
+                                {"$set": {"analyzed_for_memory": True}},
+                            )
+                        if analyzed_msg_ids:
+                            print(f"✅ Marked {len(analyzed_msg_ids)} messages as analyzed_for_memory")
+                except Exception as e:
+                    print(f"⚠️  Failed to mark messages as analyzed: {e}")
 
             return {
                 "interests": parsed.get("interests", []) or [],
