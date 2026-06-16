@@ -52,6 +52,7 @@ class UsersService {
             proactiveGroup,
             fcmToken, // Include FCM token if provided
             isProactive: experiment.experimentFeatures?.proactiveSettings?.enabled ?? false,
+            demo_registration_time: new Date(), // Set registration time for demo timing (oxford-demo)
         });
 
         // If FCM token was provided during registration, assign isProactive based on experiment settings

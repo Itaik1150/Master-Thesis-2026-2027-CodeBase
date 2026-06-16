@@ -21,4 +21,6 @@ export interface IUser {
     fcmToken?: string;
     fcmTokenUpdatedAt?: Date;
     isProactive?: boolean;
+    is_demo_finished?: boolean; // Demo termination flag (oxford-demo branch)
+    demo_registration_time?: Date; // User registration timestamp for demo timing
 }

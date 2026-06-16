@@ -4,6 +4,9 @@ Proactive notification scheduler.
 Fires run_full_proactive_cycle() at fixed times each day,
 only within the allowed time window.
 
+For demo mode (IS_DEMO_MODE=true), fires run_demo_cycle() every 10 seconds
+to handle hardcoded 3-notification sequence.
+
 Usage:
     cd logic-python
     python scheduler.py
@@ -49,6 +52,9 @@ else:
 from services.research_service import get_research_service
 
 # ── Configuration ────────────────────────────────────────────────────────────
+# Demo mode flag (set via IS_DEMO_MODE environment variable)
+IS_DEMO_MODE = os.getenv("IS_DEMO_MODE", "false").lower() == "true"
+
 # Times to fire (24-hour clock, Jerusalem time).
 # Change these here until a Phase-4 dashboard setting is available.
 FIRE_TIMES = ["20:55", "18:00", "16:10", "16:20", "16:30"]
@@ -64,6 +70,24 @@ def within_window() -> bool:
     """Return True if the current Jerusalem hour is inside the allowed window."""
     hour = datetime.now(ZoneInfo("Asia/Jerusalem")).hour
     return WINDOW_START_HOUR <= hour < WINDOW_END_HOUR
+
+
+def demo_job():
+    """Demo cycle job — runs every 10 seconds to fire hardcoded 3 notifications."""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n⏰ [{now_str}] Demo cycle triggered")
+
+    try:
+        result = get_research_service().run_demo_cycle()
+        if result.get("success"):
+            sent = result.get("notifications_sent", 0)
+            finished = result.get("finished", 0)
+            if sent > 0 or finished > 0:
+                print(f"✅ Demo cycle done — {sent} sent, {finished} finished")
+        else:
+            print(f"⚠️  Demo cycle finished with issues: {result.get('error', 'unknown')}")
+    except Exception as e:
+        print(f"❌ Unhandled error in demo_job: {e}")
 
 
 def proactive_job():
@@ -93,19 +117,31 @@ def job_listener(event):
 if __name__ == "__main__":
     scheduler = BlockingScheduler(timezone="Asia/Jerusalem")
 
-    for time_str in FIRE_TIMES:
-        h, m = map(int, time_str.split(":"))
-        scheduler.add_job(proactive_job, "cron", hour=h, minute=m, id=f"proactive_{time_str}")
+    if IS_DEMO_MODE:
+        # Demo mode: fire every 10 seconds
+        scheduler.add_job(demo_job, "interval", seconds=10, id="demo_cycle")
+        
+        print("=" * 55)
+        print("🎬 Lexi Demo Scheduler (DEMO MODE)")
+        print("   Fire interval: every 10 seconds")
+        print("   Notifications: 3 hardcoded (30s, 2min, 5min)")
+        print("   Press Ctrl+C to stop.")
+        print("=" * 55)
+    else:
+        # Standard mode: fire at fixed times
+        for time_str in FIRE_TIMES:
+            h, m = map(int, time_str.split(":"))
+            scheduler.add_job(proactive_job, "cron", hour=h, minute=m, id=f"proactive_{time_str}")
+
+        print("=" * 55)
+        print("🗓️  Lexi Proactive Scheduler")
+        print(f"   Fire times : {', '.join(FIRE_TIMES)} (Jerusalem time)")
+        print(f"   Time window: {WINDOW_START_HOUR}:00 – {WINDOW_END_HOUR}:00")
+        print(f"   Daily cap  : see DAILY_MESSAGE_LIMIT env var")
+        print("   Press Ctrl+C to stop.")
+        print("=" * 55)
 
     scheduler.add_listener(job_listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
-
-    print("=" * 55)
-    print("🗓️  Lexi Proactive Scheduler")
-    print(f"   Fire times : {', '.join(FIRE_TIMES)} (Jerusalem time)")
-    print(f"   Time window: {WINDOW_START_HOUR}:00 – {WINDOW_END_HOUR}:00")
-    print(f"   Daily cap  : see DAILY_MESSAGE_LIMIT env var")
-    print("   Press Ctrl+C to stop.")
-    print("=" * 55)
 
     try:
         scheduler.start()  # blocks here; next_run_time is only available after start

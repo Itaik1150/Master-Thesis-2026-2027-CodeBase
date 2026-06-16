@@ -1327,6 +1327,135 @@ class ResearchService:
                 "error": str(e)
             }
 
+    def run_demo_cycle(self) -> Dict:
+        """
+        Run demo cycle with hardcoded 3-notification sequence.
+        Notifications fire at: 30 seconds, 2 minutes, 5 minutes post-registration.
+        After the 3rd notification, sets is_demo_finished: true for the user.
+        
+        This function is oxford-demo specific and runs only when IS_DEMO_MODE env var is set.
+        """
+        cycle_id = str(uuid.uuid4())
+        start_time = datetime.now()
+        
+        print(f"\n=== 🎬 Starting Demo Cycle {cycle_id[:8]}... ===")
+        
+        try:
+            if not mongodb_client.connect():
+                print("❌ Failed to connect to MongoDB")
+                return {"success": False, "message": "MongoDB connection failed"}
+            
+            # Find all demo users (is_demo_finished = false AND demo_registration_time exists)
+            demo_users = list(mongodb_client.db[mongodb_client.users_collection].find({
+                "is_demo_finished": False,
+                "demo_registration_time": {"$exists": True},
+                "fcmToken": {"$exists": True, "$ne": ""},
+            }))
+            
+            if not demo_users:
+                print("📊 No active demo users found")
+                return {"success": True, "message": "No demo users", "notifications_sent": 0, "finished": 0}
+            
+            print(f"📊 Found {len(demo_users)} active demo users")
+            
+            notifications_sent = 0
+            finished_count = 0
+            
+            # Hardcoded notification timings (in seconds)
+            TIMING_POINTS = [30, 120, 300]  # 30s, 2min, 5min
+            DEMO_MESSAGES = [
+                "👋 Hi there! I'm Lexi. Looking forward to our chat!",
+                "💭 By the way, how are you feeling today?",
+                "🎉 Thanks for chatting with me! This has been wonderful."
+            ]
+            
+            # Check each demo user
+            for user in demo_users:
+                user_id = str(user["_id"])
+                username = user.get("username", user_id)
+                registration_time = user.get("demo_registration_time")
+                
+                if not registration_time:
+                    continue
+                
+                elapsed_seconds = (datetime.now(timezone.utc) - registration_time).total_seconds()
+                
+                # Determine which notification(s) should fire
+                notification_index = None
+                for idx, timing in enumerate(TIMING_POINTS):
+                    if elapsed_seconds >= timing and not user.get(f"demo_notif_{idx}_sent"):
+                        notification_index = idx
+                        break
+                
+                if notification_index is None:
+                    continue
+                
+                # Send the notification
+                message = DEMO_MESSAGES[notification_index]
+                
+                try:
+                    fcm_token = user.get("fcmToken", "")
+                    result = self.fcm_service.send_to_token(token=fcm_token, body=message)
+                    
+                    if result:
+                        print(f"✅ Demo notification {notification_index + 1}/3 sent to {username}")
+                        notifications_sent += 1
+                        
+                        # Mark this notification as sent
+                        update_data = {f"demo_notif_{notification_index}_sent": True}
+                        
+                        # If this was the 3rd notification, mark demo as finished
+                        if notification_index == 2:
+                            update_data["is_demo_finished"] = True
+                            finished_count += 1
+                            print(f"🎬 Demo finished for {username}")
+                        
+                        mongodb_client.db[mongodb_client.users_collection].update_one(
+                            {"_id": user["_id"]},
+                            {"$set": update_data}
+                        )
+                        
+                        # Log the event
+                        self.log_proactive_event(
+                            cycle_id=cycle_id,
+                            user_id=user_id,
+                            message={"generated_message": message, "trigger_source": "demo"},
+                            status="sent",
+                            proactive_group="demo"
+                        )
+                    else:
+                        print(f"❌ Failed to send demo notification to {username}")
+                
+                except Exception as e:
+                    print(f"❌ Error sending demo notification to {username}: {e}")
+            
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            
+            print(f"\n✅ Demo Cycle Complete!")
+            print(f"📊 Results: {notifications_sent} sent, {finished_count} finished")
+            print(f"⏱️ Duration: {duration:.2f} seconds")
+            
+            return {
+                "success": True,
+                "cycle_id": cycle_id,
+                "notifications_sent": notifications_sent,
+                "finished": finished_count,
+                "duration": duration,
+                "message": f"Sent {notifications_sent} demo notifications, finished {finished_count} users"
+            }
+        
+        except Exception as e:
+            print(f"❌ Demo cycle failed: {e}")
+            return {
+                "success": False,
+                "cycle_id": cycle_id,
+                "error": str(e)
+            }
+        finally:
+            mongodb_client.disconnect()
+
+
 _instance: Optional["ResearchService"] = None
 
 
