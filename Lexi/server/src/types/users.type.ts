@@ -21,4 +21,5 @@ export interface IUser {
     fcmToken?: string;
     fcmTokenUpdatedAt?: Date;
     isProactive?: boolean;
+    is_demo_finished?: boolean;
 }
