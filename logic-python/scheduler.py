@@ -51,7 +51,8 @@ from services.research_service import get_research_service
 # ── Configuration ────────────────────────────────────────────────────────────
 # Times to fire (24-hour clock, Jerusalem time).
 # Change these here until a Phase-4 dashboard setting is available.
-FIRE_TIMES = ["15:40", "19:20", "11:50"]
+# FIRE_TIMES = ["13:45", "17:30", "21:15"]
+FIRE_TIMES = ["00:06", "00:08", "00:10"]
 # Notifications will only be sent if the current hour falls inside this window.
 # This is a safety net on top of the cron schedule.
 WINDOW_START_HOUR = 9    # inclusive
