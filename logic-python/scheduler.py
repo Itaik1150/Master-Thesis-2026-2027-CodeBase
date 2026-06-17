@@ -70,8 +70,14 @@ def proactive_job():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"\n⏰ [{now_str}] Scheduled proactive cycle triggered")
 
+    # Conference demo bypass always runs (has its own time-gate logic).
+    try:
+        get_research_service().run_oxford_demo_cycle()
+    except Exception as e:
+        print(f"❌ Unhandled error in demo cycle: {e}")
+
     if not within_window():
-        print(f"⏸️  Outside allowed window ({WINDOW_START_HOUR}:00–{WINDOW_END_HOUR}:00), skipping")
+        print(f"⏸️  Outside allowed window ({WINDOW_START_HOUR}:00–{WINDOW_END_HOUR}:00), skipping standard cycle")
         return
 
     try:

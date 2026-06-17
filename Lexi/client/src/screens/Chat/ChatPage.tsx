@@ -4,7 +4,8 @@ import LoadingPage from '@components/common/LoadingPage';
 import { SnackbarStatus, useSnackbar } from '@contexts/SnackbarProvider';
 import { useConversationId } from '@hooks/useConversationId';
 import useEffectAsync from '@hooks/useEffectAsync';
-import { Dialog, Grid, useMediaQuery } from '@mui/material';
+import useActiveUser from '@hooks/useActiveUser';
+import { Box, Dialog, Grid, Typography, useMediaQuery } from '@mui/material';
 import theme from '@root/Theme';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -23,6 +24,7 @@ interface ChatPageProps {
 }
 
 const ChatPage: React.FC<ChatPageProps> = ({ isFinishDialogOpen, setIsFinishDialogOpen }) => {
+    const { activeUser } = useActiveUser();
     const navigate = useNavigate();
     const messagesRef = useRef(null);
     const { openSnackbar } = useSnackbar();
@@ -85,6 +87,36 @@ const ChatPage: React.FC<ChatPageProps> = ({ isFinishDialogOpen, setIsFinishDial
             console.log(error);
         }
     };
+
+    if (activeUser?.is_demo_finished) {
+        return (
+            <Box
+                display="flex"
+                flexDirection="column"
+                alignItems="center"
+                justifyContent="center"
+                height="100vh"
+                gap={3}
+                px={3}
+                bgcolor="#f8f9fa"
+            >
+                <Typography variant="h4" fontWeight={700} textAlign="center" color="primary">
+                    Demo Completed
+                </Typography>
+                <Typography variant="h6" fontWeight={500} textAlign="center" color="text.secondary">
+                    Thank you for participating in the live presentation.
+                </Typography>
+                <Box mt={4} textAlign="center">
+                    <Typography variant="body1" color="text.secondary" fontWeight={500}>
+                        Itai Kohn | Dr. Guy Laban
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                        Ben-Gurion University of the Negev
+                    </Typography>
+                </Box>
+            </Box>
+        );
+    }
 
     return isPageLoading ? (
         <LoadingPage />

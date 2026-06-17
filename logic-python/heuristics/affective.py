@@ -103,7 +103,7 @@ def analyze_and_schedule(user: dict, mongodb_client, llm_service) -> None:
     user_id  = str(user["_id"])
     memory   = user.get("proactiveMemory") or {}
     language = memory.get("preferred_language", "he")
-    last_count = int(memory.get("last_affective_analyzed_msg_count", 0))
+    last_count = int(memory.get("last_affective_analyzed_msg_count") or 0)
 
     # ── Phase A: Read messages from the last N conversations ──────────────────
     all_user_texts = []

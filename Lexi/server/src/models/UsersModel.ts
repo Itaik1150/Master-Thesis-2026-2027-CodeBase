@@ -37,6 +37,7 @@ export const userSchema = new Schema<IUser>(
         fcmToken: { type: String },
         fcmTokenUpdatedAt: { type: Date },
         isProactive: { type: Boolean, default: false }, // Will be set in services when FCM token is added
+        is_demo_finished: { type: Boolean, default: false },
     },
     { versionKey: false },
 );

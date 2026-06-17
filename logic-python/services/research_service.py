@@ -3,6 +3,7 @@ Minimal Research Service - Basic injection and FCM functionality
 """
 import os
 import random
+import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
@@ -17,6 +18,16 @@ MEMORY_CONVERSATIONS_LIMIT = 10    # how many past conversations to read per use
 
 LEXI_SERVER_URL  = os.getenv("LEXI_SERVER_URL", "https://lexi-server-1rx9.onrender.com")
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "https://master-thesis-2026-2027-code-base.vercel.app")
+
+# ── Conference Demo Bypass ────────────────────────────────────────────────────
+DEMO_EXPERIMENT_ID = "6a32e516d3d79d396942bff3"
+
+DEMO_MESSAGES = [
+    {"send_after": "2026-06-12T14:00:00", "text": "DEMO MSG 1 PLACEHOLDER"},
+    {"send_after": "2026-06-13T16:00:00", "text": "DEMO MSG 2 PLACEHOLDER"},
+    {"send_after": "2026-06-14T11:00:00", "text": "DEMO MSG 3 PLACEHOLDER"},
+]
+# ─────────────────────────────────────────────────────────────────────────────
 
 from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
@@ -218,8 +229,10 @@ class ResearchService:
             # Step 3: fetch only users who are explicitly marked proactive=true.
             # Users set to false (e.g. via dashboard toggle) are excluded.
             # Also exclude users in the 'reactive' proactive group (no notifications).
+            # Demo experiment users are handled exclusively by run_oxford_demo_cycle().
+            demo_id_variants = [DEMO_EXPERIMENT_ID, ObjectId(DEMO_EXPERIMENT_ID)]
             proactive_users = list(mongodb_client.db[mongodb_client.users_collection].find({
-                "experimentId": {"$in": id_variants},
+                "experimentId": {"$in": id_variants, "$nin": demo_id_variants},
                 "fcmToken": {"$exists": True, "$ne": ""},
                 "isProactive": True,
                 "proactiveGroup": {"$ne": "reactive"},  # Exclude reactive group
@@ -1180,7 +1193,7 @@ class ResearchService:
                 # Step 2: Pre-create the conversation so we have a conversationId
                 # to embed in the FCM data for direct deep-linking.
                 experiment_id_str = str(user.get("experimentId", ""))
-                num_convs = int(user.get("numberOfConversations", 0))
+                num_convs = int(user.get("numberOfConversations") or 0)
                 conversation_id = self._create_conversation(user_id, experiment_id_str, num_convs)
                 if conversation_id:
                     print(f"📝 Pre-created conversation {conversation_id} for {username}")
@@ -1275,6 +1288,144 @@ class ResearchService:
         finally:
             mongodb_client.disconnect()
     
+    def run_oxford_demo_cycle(self) -> Dict:
+        """
+        Conference Demo Bypass.
+
+        Sends 3 hardcoded FCM messages to all users in DEMO_EXPERIMENT_ID
+        at fixed wall-clock times, completely bypassing LLM personalisation.
+        Tracks progress via `demo_msgs_sent_count` on the user document.
+        Sets `is_demo_finished: True` after the 3rd message is delivered.
+        
+        **IMPORTANT:** Assumes MongoDB connection is already open by the caller
+        (e.g., run_cycle.py or scheduler.py). Does NOT call connect() or disconnect()
+        to avoid interfering with the shared connection lifecycle.
+        
+        For each demo message:
+        1. Inject the message into agent.firstChatSentence (same as standard cycle)
+        2. Pre-create a conversation so we have a conversationId for deep-linking
+        3. Send FCM with conversationId in the data payload
+        4. Update demo progress tracking
+        """
+        now = datetime.now()
+        sent_count = 0
+
+        print(f"\n=== 🎯 Oxford Demo Cycle ({now.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+
+        try:
+            # Ensure MongoDB connection is established
+            if mongodb_client.db is None:
+                if not mongodb_client.connect():
+                    print("❌ Demo cycle: failed to connect to MongoDB")
+                    return {"success": False, "error": "MongoDB connect failed"}
+
+            demo_id_variants = [DEMO_EXPERIMENT_ID, ObjectId(DEMO_EXPERIMENT_ID)]
+            demo_users = list(mongodb_client.db[mongodb_client.users_collection].find({
+                "experimentId": {"$in": demo_id_variants},
+                "fcmToken": {"$exists": True, "$ne": ""},
+                "is_demo_finished": {"$ne": True},
+            }))
+
+            print(f"👥 Demo cycle: {len(demo_users)} active demo participant(s)")
+
+            for user in demo_users:
+                user_id   = str(user["_id"])
+                username  = user.get("username", "Unknown")
+                fcm_token = user.get("fcmToken", "")
+                msgs_sent = user.get("demo_msgs_sent_count", 0)
+                experiment_id_str = str(user.get("experimentId", ""))
+                num_convs = int(user.get("numberOfConversations") or 0)
+
+                print(f"\n👤 Demo user: {username} (messages sent so far: {msgs_sent}/{len(DEMO_MESSAGES)})")
+
+                for idx, msg in enumerate(DEMO_MESSAGES):
+                    # Safety check: Skip if already sent
+                    if idx < msgs_sent:
+                        continue
+
+                    # Time check: Skip if not yet due
+                    send_after = datetime.fromisoformat(msg["send_after"])
+                    if now < send_after:
+                        break  # scheduled time not yet reached for this message
+
+                    try:
+                        # Step 1: Inject the demo message as firstChatSentence
+                        injection_result = self.inject_prompt(user_id, msg["text"])
+                        if injection_result:
+                            print(f"💬 Demo: message injected for {username}")
+                        else:
+                            print(f"⚠️  Demo: inject_prompt failed for {username} — will still send FCM")
+
+                        # Step 2: Pre-create conversation for deep-linking
+                        conversation_id = self._create_conversation(user_id, experiment_id_str, num_convs)
+                        if conversation_id:
+                            print(f"📝 Demo: pre-created conversation {conversation_id}")
+                        else:
+                            print(f"⚠️  Demo: could not pre-create conversation for {username}")
+
+                        # Step 3: Send FCM with deep-link data
+                        from core.models import UserContext
+                        fcm_extra = {}
+                        if conversation_id and experiment_id_str:
+                            fcm_extra = {
+                                "conversationId": conversation_id,
+                                "experimentId": experiment_id_str,
+                            }
+
+                        notification_result = self.fcm_service.send_to_user(
+                            user=UserContext(
+                                user_id=user_id,
+                                name=username,
+                                fcm_token=fcm_token,
+                            ),
+                            body=msg["text"],
+                            title="Lexi",
+                            extra_data=fcm_extra if fcm_extra else None,
+                        )
+
+                        if not notification_result:
+                            print(f"❌ Demo: FCM failed for {username}")
+                            break  # Stop this user's messages on FCM failure
+
+                        # The injection helper functions likely closed the connection internally.
+                        # We must forcefully re-establish it before our atomic update.
+                        mongodb_client.connect()
+
+                        # Step 4: IMMEDIATELY update database with new count
+                        new_count = idx + 1
+                        is_complete = (new_count >= len(DEMO_MESSAGES))
+
+                        # ATOMIC UPDATE: Always update demo_msgs_sent_count, and set is_demo_finished if complete
+                        update_payload = {"$set": {"demo_msgs_sent_count": new_count}}
+                        if is_complete:
+                            update_payload["$set"]["is_demo_finished"] = True
+
+                        mongodb_client.db[mongodb_client.users_collection].update_one(
+                            {"_id": user["_id"]},
+                            update_payload,
+                        )
+
+                        print(f"✅ Demo: FCM sent (message #{idx + 1}/{len(DEMO_MESSAGES)}) for {username}")
+
+                        if is_complete:
+                            print(f"🔒 Demo: LOCKED OUT after all {len(DEMO_MESSAGES)} messages for {username} (is_demo_finished=True)")
+                            break  # Stop message loop, move to next user
+
+                        sent_count += 1
+                        msgs_sent = new_count
+
+                    except Exception as fcm_err:
+                        print(f"❌ Demo error for {username}: {fcm_err}")
+                        break  # stop processing this user on failure
+
+            print(f"=== 🎯 Demo Cycle done — {sent_count} FCM sent ===\n")
+            return {"success": True, "sent": sent_count}
+
+        except Exception as e:
+            print(f"❌ Demo cycle unhandled error: {e}")
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
+
     def run_full_proactive_cycle(self) -> Dict:
         """Main orchestrator for proactive research cycle"""
         cycle_id = str(uuid.uuid4())
@@ -1321,6 +1472,7 @@ class ResearchService:
 
         except Exception as e:
             print(f"❌ Proactive cycle failed: {e}")
+            traceback.print_exc()
             return {
                 "success": False,
                 "cycle_id": cycle_id,

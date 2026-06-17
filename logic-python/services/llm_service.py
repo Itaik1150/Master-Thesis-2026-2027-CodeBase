@@ -420,7 +420,7 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
                     if content:
                         normalized_emotional.append({
                             "content": content,
-                            "affective_score": max(1, min(10, int(item.get("affective_score", 1)))),
+                            "affective_score": max(1, min(10, int(item.get("affective_score") or 1))),
                             "timestamp_iso": item.get("timestamp_iso") or today_label,
                             "used": False,  # Always initialize as unused
                         })
@@ -444,7 +444,7 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
                 "interests": parsed.get("interests", []) or [],
                 "future_mentions": normalized_future,
                 "conversation_insight": parsed.get("conversation_insight", "") or "",
-                "sensitivity_score": max(1, min(10, int(parsed.get("sensitivity_score", 1)))),  # Clamp to 1-10
+                "sensitivity_score": max(1, min(10, int(parsed.get("sensitivity_score") or 1))),  # Clamp to 1-10
                 "emotional_memories": normalized_emotional,
             }
         except json.JSONDecodeError as e:
@@ -679,7 +679,7 @@ Output: {"should_send": true, "message": "ראית את בית הקפה החדש
                 "primary_emotion":      str(parsed.get("primary_emotion", "neutral")),
                 "intensity":            float(parsed.get("intensity", 0.0)),
                 "needs_followup":       bool(parsed.get("needs_followup", False)),
-                "suggested_delay_hours": int(parsed.get("suggested_delay_hours", 4)),
+                "suggested_delay_hours": int(parsed.get("suggested_delay_hours") or 4),
             }
         except json.JSONDecodeError as e:
             print(f"⚠️  analyze_conversation_emotion: invalid JSON: {e}")
