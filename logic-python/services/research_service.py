@@ -23,10 +23,35 @@ FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "https://master-thesis-2026-2
 DEMO_EXPERIMENT_ID = "6a32e516d3d79d396942bff3"
 
 DEMO_MESSAGES = [
-    {"send_after": "2026-06-12T14:00:00", "text": "DEMO MSG 1 PLACEHOLDER"},
-    {"send_after": "2026-06-13T16:00:00", "text": "DEMO MSG 2 PLACEHOLDER"},
-    {"send_after": "2026-06-14T11:00:00", "text": "DEMO MSG 3 PLACEHOLDER"},
+    {
+        "send_after": "2026-06-25T15:30:00+01:00", 
+        "text": "Hi! You've made it through four intense keynotes today. 🧠 Make sure to grab a coffee during the break! How are you finding the cognitive AI discussions so far?"
+    },
+    {
+        "send_after": "2026-06-25T19:15:00+01:00", 
+        "text": "Day 1 of EIF CogAI is almost in the books! 🥂 Enjoy the reception and the formal dinner. What was your favorite moment or insight from today?"
+    },
+    {
+        "send_after": "2026-06-26T11:45:00+01:00", 
+        "text": "Good morning! Hope you're having a great Day 2. Enjoy the lunch break and the upcoming afternoon panels! Thank you for experiencing Lexi."
+    }
 ]
+
+
+# DEMO_MESSAGES = [
+#     {
+#         "send_after": "2026-06-17T23:06:00+02:00", 
+#         "text": "TEST 1: This is the first test message. Checking the system..."
+#     },
+#     {
+#         "send_after": "2026-06-17T23:08:00+02:00", 
+#         "text": "TEST 2: Second message arrived successfully. The cron job is firing."
+#     },
+#     {
+#         "send_after": "2026-06-17T23:10:00+02:00", 
+#         "text": "TEST 3: Final message. After this, you should be completely locked out of the app."
+#     }
+# ]
 # ─────────────────────────────────────────────────────────────────────────────
 
 from utils.mongodb_client import mongodb_client
