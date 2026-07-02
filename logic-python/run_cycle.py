@@ -15,9 +15,11 @@ load_dotenv()
 from services.research_service import research_service
 
 if __name__ == "__main__":
+    
+    
     # Conference demo bypass (has its own time-gate; always run first).
-    print("🎯 Running Oxford demo cycle...")
-    research_service.run_oxford_demo_cycle()
+    # print("🎯 Running Oxford demo cycle...")
+    # research_service.run_oxford_demo_cycle()
 
     print("🚀 Render cron: starting proactive cycle...")
     result = research_service.run_full_proactive_cycle()

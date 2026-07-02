@@ -1,5 +1,5 @@
 """
-Minimal Research Service - Basic injection and FCM functionality
+Research Service - Proactive injection and FCM functionality
 """
 import os
 import random
@@ -10,49 +10,35 @@ from typing import List, Dict, Optional
 from bson import ObjectId
 import requests as http_requests
 
-MAX_DAILY_NOTIFICATIONS = 9999     # TEMP for testing 3.4d — revert to 3 before pilot
-MAX_CANDIDATES = 6                 # max pool size per cycle (news + topic fill)
-MEMORY_TOPICS_LIMIT = 5            # how many recent sent topics to remember per user (for memory display)
-BLOCK_LAST_N_TOPICS = 1            # don't repeat this many most-recent topics back-to-back
-MEMORY_CONVERSATIONS_LIMIT = 10    # how many past conversations to read per user (3.4b)
+MAX_DAILY_NOTIFICATIONS = 3        # max notifications per user per day
+MAX_CANDIDATES = 6                 # max topic-based fallback candidates per cycle
+MEMORY_TOPICS_LIMIT = 5            # recent sent topics to remember per user
+BLOCK_LAST_N_TOPICS = 1            # don't repeat the most-recent N topics back-to-back
+MEMORY_CONVERSATIONS_LIMIT = 10    # past conversations to read per user for memory extraction
 
 LEXI_SERVER_URL  = os.getenv("LEXI_SERVER_URL", "https://lexi-server-1rx9.onrender.com")
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "https://master-thesis-2026-2027-code-base.vercel.app")
 
 # ── Conference Demo Bypass ────────────────────────────────────────────────────
-DEMO_EXPERIMENT_ID = "6a32e516d3d79d396942bff3"
-
-DEMO_MESSAGES = [
-    {
-        "send_after": "2026-06-25T15:30:00+01:00", 
-        "text": "Hi! You've made it through four intense keynotes today. 🧠 Make sure to grab a coffee during the break! How are you finding the cognitive AI discussions so far?"
-    },
-    {
-        "send_after": "2026-06-25T19:15:00+01:00", 
-        "text": "Day 1 of EIF CogAI is almost in the books! 🥂 Enjoy the reception and the formal dinner. What was your favorite moment or insight from today?"
-    },
-    {
-        "send_after": "2026-06-26T11:45:00+01:00", 
-        "text": "Good morning! Hope you're having a great Day 2. Enjoy the lunch break and the upcoming afternoon panels! Thank you for experiencing Lexi."
-    }
-]
-
+# DEMO_EXPERIMENT_ID = "6a32e516d3d79d396942bff3"
 
 # DEMO_MESSAGES = [
 #     {
-#         "send_after": "2026-06-17T23:06:00+02:00", 
-#         "text": "TEST 1: This is the first test message. Checking the system..."
+#         "send_after": "2026-06-25T15:30:00+01:00", 
+#         "text": "Hi! You've made it through four intense keynotes today. 🧠 Make sure to grab a coffee during the break! How are you finding the cognitive AI discussions so far?"
 #     },
 #     {
-#         "send_after": "2026-06-17T23:08:00+02:00", 
-#         "text": "TEST 2: Second message arrived successfully. The cron job is firing."
+#         "send_after": "2026-06-25T19:15:00+01:00", 
+#         "text": "Day 1 of EIF CogAI is almost in the books! 🥂 Enjoy the reception and the formal dinner. What was your favorite moment or insight from today?"
 #     },
 #     {
-#         "send_after": "2026-06-17T23:10:00+02:00", 
-#         "text": "TEST 3: Final message. After this, you should be completely locked out of the app."
+#         "send_after": "2026-06-26T11:45:00+01:00", 
+#         "text": "Good morning! Hope you're having a great Day 2. Enjoy the lunch break and the upcoming afternoon panels! Thank you for experiencing Lexi."
 #     }
 # ]
-# ─────────────────────────────────────────────────────────────────────────────
+
+
+
 
 from utils.mongodb_client import mongodb_client
 from services.fcm_service import FCMService
@@ -61,9 +47,7 @@ from heuristics import temporal, affective, behavioural_gap
 from core.models import NudgeContext
 
 class ResearchService:
-    """
-    Minimal research service for testing proactive loop
-    """
+
     
     def __init__(self):
         """Initialize research service"""
@@ -156,57 +140,57 @@ class ResearchService:
             except Exception:
                 pass
     
-    def send_notification(self, user_id: str, message: str) -> bool:
-        """
-        Send FCM notification to user
+    # def send_notification(self, user_id: str, message: str) -> bool:
+        # """
+        # Send FCM notification to user
         
-        Args:
-            user_id: MongoDB user ID
-            message: Message content for notification
+        # Args:
+        #     user_id: MongoDB user ID
+        #     message: Message content for notification
             
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            # Get user data from MongoDB
-            if not mongodb_client.connect():
-                print("❌ Failed to connect to MongoDB")
-                return False
+        # Returns:
+        #     True if successful, False otherwise
+        # """
+        # try:
+        #     # Get user data from MongoDB
+        #     if not mongodb_client.connect():
+        #         print("❌ Failed to connect to MongoDB")
+        #         return False
             
-            user_data = mongodb_client.db[mongodb_client.users_collection].find_one({"_id": ObjectId(str(user_id))})
+        #     user_data = mongodb_client.db[mongodb_client.users_collection].find_one({"_id": ObjectId(str(user_id))})
             
-            if not user_data:
-                print(f"❌ User {user_id} not found")
-                return False
+        #     if not user_data:
+        #         print(f"❌ User {user_id} not found")
+        #         return False
             
-            fcm_token = user_data.get('fcmToken', '')
-            username = user_data.get('username', 'Unknown')
+        #     fcm_token = user_data.get('fcmToken', '')
+        #     username = user_data.get('username', 'Unknown')
             
-            if not fcm_token:
-                print(f"❌ No FCM token for user {username}")
-                return False
+        #     if not fcm_token:
+        #         print(f"❌ No FCM token for user {username}")
+        #         return False
             
-            # Send FCM notification
-            notification_title = "📰 New Message Available"
-            notification_body = f"Hi {username}! You have a new message waiting."
+        #     # Send FCM notification
+        #     notification_title = "📰 New Message Available"
+        #     notification_body = f"Hi {username}! You have a new message waiting."
             
-            result = self.fcm_service.send_to_token(
-                token=fcm_token,
-                body=f"{notification_title}: {notification_body}"
-            )
+        #     result = self.fcm_service.send_to_token(
+        #         token=fcm_token,
+        #         body=f"{notification_title}: {notification_body}"
+        #     )
             
-            if result:
-                print(f"✅ FCM notification sent to {username}")
-                return True
-            else:
-                print(f"❌ Failed to send FCM to {username}")
-                return False
+        #     if result:
+        #         print(f"✅ FCM notification sent to {username}")
+        #         return True
+        #     else:
+        #         print(f"❌ Failed to send FCM to {username}")
+        #         return False
                 
-        except Exception as e:
-            print(f"❌ Error sending notification: {e}")
-            return False
-        finally:
-            mongodb_client.disconnect()
+        # except Exception as e:
+        #     print(f"❌ Error sending notification: {e}")
+        #     return False
+        # finally:
+        #     mongodb_client.disconnect()
     
     def get_all_proactive_users(self):
         """
@@ -253,14 +237,13 @@ class ResearchService:
 
             # Step 3: fetch only users who are explicitly marked proactive=true.
             # Users set to false (e.g. via dashboard toggle) are excluded.
-            # Also exclude users in the 'reactive' proactive group (no notifications).
-            # Demo experiment users are handled exclusively by run_oxford_demo_cycle().
-            demo_id_variants = [DEMO_EXPERIMENT_ID, ObjectId(DEMO_EXPERIMENT_ID)]
+            # Reactive group users are excluded here as an extra safety net
+            # (they are also handled inside _resolve_message).
             proactive_users = list(mongodb_client.db[mongodb_client.users_collection].find({
-                "experimentId": {"$in": id_variants, "$nin": demo_id_variants},
+                "experimentId": {"$in": id_variants},
                 "fcmToken": {"$exists": True, "$ne": ""},
                 "isProactive": True,
-                "proactiveGroup": {"$ne": "reactive"},  # Exclude reactive group
+                "proactiveGroup": {"$ne": "reactive"},
             }))
 
             print(f"📊 Found {len(proactive_users)} proactive users with FCM tokens "
@@ -273,238 +256,167 @@ class ResearchService:
         finally:
             mongodb_client.disconnect()
     
-    def run_proactive_cycle(self, message: str) -> dict:
-        """
-        Run complete proactive cycle: inject message and send FCM to all proactive users
+    # run_proactive_cycle() — removed (stale: used a hardcoded message string,
+    # replaced entirely by run_full_proactive_cycle + coordinated_send_and_inject)
+    
+    # def diagnose_user(self, user_id: str):
+        # """
+        # Diagnose user data and configuration issues
         
-        Args:
-            message: Message to inject and send
+        # Args:
+        #     user_id: MongoDB user ID
+        # """
+        # try:
+        #     if not mongodb_client.connect():
+        #         print("❌ Failed to connect to MongoDB")
+        #         return
             
-        Returns:
-            Dictionary with results
-        """
-        try:
-            # Get all proactive users
-            proactive_users = self.get_all_proactive_users()
+        #     user_data = mongodb_client.db[mongodb_client.users_collection].find_one({"_id": ObjectId(str(user_id))})
             
-            if not proactive_users:
-                print("❌ No proactive users found")
-                return {
-                    "success": False,
-                    "message": "No proactive users found",
-                    "injected_count": 0,
-                    "notification_count": 0
-                }
+        #     if not user_data:
+        #         print(f"❌ User {user_id} not found in database")
+        #         return
             
-            print(f"🚀 Starting proactive cycle for {len(proactive_users)} users...")
-            print(f"📝 Message: '{message}'")
+        #     print(f"\n🔍 User Diagnosis for: {user_data.get('username', 'Unknown')}")
+        #     print(f"📋 User ID: {user_id}")
+        #     print(f"📱 FCM Token: {'✅ Present' if user_data.get('fcmToken') else '❌ Missing'}")
+        #     print(f"🔔 isProactive: {user_data.get('isProactive', False)}")
             
-            injected_count = 0
-            notification_count = 0
+        #     # Check agent structure
+        #     agent = user_data.get('agent', {})
+        #     print(f"🤖 Agent exists: {'✅ Yes' if agent else '❌ No'}")
             
-            # Process each user
-            for user in proactive_users:
-                user_id = user['_id']
-                username = user.get('username', 'Unknown')
-                
-                print(f"\n👤 Processing user: {username}")
-                
-                # Inject message
-                injection_success = self.inject_prompt(user_id, message)
-                if injection_success:
-                    injected_count += 1
-                    print(f"✅ Injection successful for {username}")
-                else:
-                    print(f"❌ Injection failed for {username}")
-                
-                # Send notification
-                notification_success = self.send_notification(user_id, message)
-                if notification_success:
-                    notification_count += 1
-                    print(f"✅ FCM sent to {username}")
-                else:
-                    print(f"❌ FCM failed for {username}")
+        #     if agent:
+        #         print(f"💬 firstChatSentence: '{agent.get('firstChatSentence', 'N/A')}'")
+        #         print(f"📝 Agent fields: {list(agent.keys())}")
             
-            results = {
-                "success": True,
-                "message": f"Processed {len(proactive_users)} proactive users",
-                "total_users": len(proactive_users),
-                "injected_count": injected_count,
-                "notification_count": notification_count
-            }
+        #     # Check FCM token format
+        #     fcm_token = user_data.get('fcmToken', '')
+        #     if fcm_token:
+        #         print(f"📱 FCM Token length: {len(fcm_token)}")
+        #         print(f"📱 FCM Token format: {'✅ Valid length' if len(fcm_token) > 50 else '❌ Too short'}")
             
-            print(f"\n🎯 Cycle Complete!")
-            print(f"📊 Results: {injected_count}/{len(proactive_users)} injected, {notification_count}/{len(proactive_users)} notifications sent")
-            
-            return results
-            
-        except Exception as e:
-            print(f"❌ Error in proactive cycle: {e}")
-            return {
-                "success": False,
-                "message": f"Error: {e}",
-                "injected_count": 0,
-                "notification_count": 0
-            }
+        # except Exception as e:
+        #     print(f"❌ Error diagnosing user: {e}")
+        # finally:
+        #     mongodb_client.disconnect()
     
-    def diagnose_user(self, user_id: str):
-        """
-        Diagnose user data and configuration issues
-        
-        Args:
-            user_id: MongoDB user ID
-        """
-        try:
-            if not mongodb_client.connect():
-                print("❌ Failed to connect to MongoDB")
-                return
+    # def test_fcm_connection(self):
+        # """Test FCM service connection and configuration"""
+        # try:
+        #     print(f"\n🔍 FCM Service Diagnosis")
+        #     print(f"📱 Dry run mode: {self.fcm_service.dry_run}")
             
-            user_data = mongodb_client.db[mongodb_client.users_collection].find_one({"_id": ObjectId(str(user_id))})
+        #     # Test with a dummy token
+        #     test_token = "test_token_12345"
+        #     test_title = "Test Notification"
+        #     test_body = "This is a test message"
             
-            if not user_data:
-                print(f"❌ User {user_id} not found in database")
-                return
+        #     print(f"🧪 Testing FCM with dummy token...")
             
-            print(f"\n🔍 User Diagnosis for: {user_data.get('username', 'Unknown')}")
-            print(f"📋 User ID: {user_id}")
-            print(f"📱 FCM Token: {'✅ Present' if user_data.get('fcmToken') else '❌ Missing'}")
-            print(f"🔔 isProactive: {user_data.get('isProactive', False)}")
-            
-            # Check agent structure
-            agent = user_data.get('agent', {})
-            print(f"🤖 Agent exists: {'✅ Yes' if agent else '❌ No'}")
-            
-            if agent:
-                print(f"💬 firstChatSentence: '{agent.get('firstChatSentence', 'N/A')}'")
-                print(f"📝 Agent fields: {list(agent.keys())}")
-            
-            # Check FCM token format
-            fcm_token = user_data.get('fcmToken', '')
-            if fcm_token:
-                print(f"📱 FCM Token length: {len(fcm_token)}")
-                print(f"📱 FCM Token format: {'✅ Valid length' if len(fcm_token) > 50 else '❌ Too short'}")
-            
-        except Exception as e:
-            print(f"❌ Error diagnosing user: {e}")
-        finally:
-            mongodb_client.disconnect()
+        #     try:
+        #         result = self.fcm_service.send_to_token(test_token, test_title, test_body)
+        #         print(f"✅ FCM service initialized successfully")
+        #         print(f"📊 Test result: {result}")
+        #     except Exception as e:
+        #         print(f"❌ FCM service error: {e}")
+        #         print(f"🔧 Check Firebase service account configuration")
+                
+        # except Exception as e:
+        #     print(f"❌ Error testing FCM: {e}")
     
-    def test_fcm_connection(self):
-        """Test FCM service connection and configuration"""
-        try:
-            print(f"\n🔍 FCM Service Diagnosis")
-            print(f"📱 Dry run mode: {self.fcm_service.dry_run}")
+    # def check_user_token_distribution(self):
+        # """Check distribution of users with and without FCM tokens"""
+        # try:
+        #     if not mongodb_client.connect():
+        #         print("❌ Failed to connect to MongoDB")
+        #         return
             
-            # Test with a dummy token
-            test_token = "test_token_12345"
-            test_title = "Test Notification"
-            test_body = "This is a test message"
+        #     print(f"\n🔍 User Token Distribution Analysis")
             
-            print(f"🧪 Testing FCM with dummy token...")
+        #     # Count all users
+        #     total_users = mongodb_client.db[mongodb_client.users_collection].count_documents({})
+        #     print(f"📊 Total users: {total_users}")
             
-            try:
-                result = self.fcm_service.send_to_token(test_token, test_title, test_body)
-                print(f"✅ FCM service initialized successfully")
-                print(f"📊 Test result: {result}")
-            except Exception as e:
-                print(f"❌ FCM service error: {e}")
-                print(f"🔧 Check Firebase service account configuration")
+        #     # Count proactive users
+        #     proactive_users = mongodb_client.db[mongodb_client.users_collection].count_documents({"isProactive": True})
+        #     print(f"🔔 Proactive users: {proactive_users}")
+            
+        #     # Count users with FCM tokens
+        #     users_with_tokens = mongodb_client.db[mongodb_client.users_collection].count_documents({
+        #         "fcmToken": {"$exists": True, "$ne": ""}
+        #     })
+        #     print(f"📱 Users with FCM tokens: {users_with_tokens}")
+            
+        #     # Count proactive users with FCM tokens
+        #     proactive_with_tokens = mongodb_client.db[mongodb_client.users_collection].count_documents({
+        #         "isProactive": True,
+        #         "fcmToken": {"$exists": True, "$ne": ""}
+        #     })
+        #     print(f"🎯 Proactive users with tokens: {proactive_with_tokens}")
+            
+        #     # Show sample users without tokens
+        #     users_without_tokens = list(mongodb_client.db[mongodb_client.users_collection].find({
+        #         "fcmToken": {"$exists": False}
+        #     }).limit(3))
+            
+        #     if users_without_tokens:
+        #         print(f"\n📋 Sample users WITHOUT FCM tokens:")
+        #         for user in users_without_tokens:
+        #             username = user.get('username', 'Unknown')
+        #             is_proactive = user.get('isProactive', False)
+        #             user_id = user.get('_id', 'Unknown')
+        #             print(f"   👤 {username} (ID: {user_id}) - Proactive: {is_proactive}")
+            
+        #     # Show sample users with tokens
+        #     users_with_tokens_list = list(mongodb_client.db[mongodb_client.users_collection].find({
+        #         "fcmToken": {"$exists": True, "$ne": ""}
+        #     }).limit(3))
+            
+        #     if users_with_tokens_list:
+        #         print(f"\n📋 Sample users WITH FCM tokens:")
+        #         for user in users_with_tokens_list:
+        #             username = user.get('username', 'Unknown')
+        #             is_proactive = user.get('isProactive', False)
+        #             user_id = user.get('_id', 'Unknown')
+        #             token_length = len(user.get('fcmToken', ''))
+        #             print(f"   👤 {username} (ID: {user_id}) - Proactive: {is_proactive} - Token: {token_length} chars")
                 
-        except Exception as e:
-            print(f"❌ Error testing FCM: {e}")
+        # except Exception as e:
+        #     print(f"❌ Error checking token distribution: {e}")
+        # finally:
+        #     mongodb_client.disconnect()
     
-    def check_user_token_distribution(self):
-        """Check distribution of users with and without FCM tokens"""
-        try:
-            if not mongodb_client.connect():
-                print("❌ Failed to connect to MongoDB")
-                return
+    # def check_mongodb_schema(self):
+        # try:
+        #     if not mongodb_client.connect():
+        #         print("❌ Failed to connect to MongoDB")
+        #         return
             
-            print(f"\n🔍 User Token Distribution Analysis")
+        #     print(f"\n🔍 MongoDB Schema Check")
+        #     print(f"📊 Database: {mongodb_client.db_name}")
+        #     print(f"📋 Collection: {mongodb_client.users_collection}")
             
-            # Count all users
-            total_users = mongodb_client.db[mongodb_client.users_collection].count_documents({})
-            print(f"📊 Total users: {total_users}")
+        #     # Check a sample user
+        #     sample_user = mongodb_client.db[mongodb_client.users_collection].find_one()
             
-            # Count proactive users
-            proactive_users = mongodb_client.db[mongodb_client.users_collection].count_documents({"isProactive": True})
-            print(f"🔔 Proactive users: {proactive_users}")
-            
-            # Count users with FCM tokens
-            users_with_tokens = mongodb_client.db[mongodb_client.users_collection].count_documents({
-                "fcmToken": {"$exists": True, "$ne": ""}
-            })
-            print(f"📱 Users with FCM tokens: {users_with_tokens}")
-            
-            # Count proactive users with FCM tokens
-            proactive_with_tokens = mongodb_client.db[mongodb_client.users_collection].count_documents({
-                "isProactive": True,
-                "fcmToken": {"$exists": True, "$ne": ""}
-            })
-            print(f"🎯 Proactive users with tokens: {proactive_with_tokens}")
-            
-            # Show sample users without tokens
-            users_without_tokens = list(mongodb_client.db[mongodb_client.users_collection].find({
-                "fcmToken": {"$exists": False}
-            }).limit(3))
-            
-            if users_without_tokens:
-                print(f"\n📋 Sample users WITHOUT FCM tokens:")
-                for user in users_without_tokens:
-                    username = user.get('username', 'Unknown')
-                    is_proactive = user.get('isProactive', False)
-                    user_id = user.get('_id', 'Unknown')
-                    print(f"   👤 {username} (ID: {user_id}) - Proactive: {is_proactive}")
-            
-            # Show sample users with tokens
-            users_with_tokens_list = list(mongodb_client.db[mongodb_client.users_collection].find({
-                "fcmToken": {"$exists": True, "$ne": ""}
-            }).limit(3))
-            
-            if users_with_tokens_list:
-                print(f"\n📋 Sample users WITH FCM tokens:")
-                for user in users_with_tokens_list:
-                    username = user.get('username', 'Unknown')
-                    is_proactive = user.get('isProactive', False)
-                    user_id = user.get('_id', 'Unknown')
-                    token_length = len(user.get('fcmToken', ''))
-                    print(f"   👤 {username} (ID: {user_id}) - Proactive: {is_proactive} - Token: {token_length} chars")
+        #     if sample_user:
+        #         print(f"👤 Sample user: {sample_user.get('username', 'Unknown')}")
+        #         print(f"📋 User fields: {list(sample_user.keys())}")
                 
-        except Exception as e:
-            print(f"❌ Error checking token distribution: {e}")
-        finally:
-            mongodb_client.disconnect()
-    
-    def check_mongodb_schema(self):
-        try:
-            if not mongodb_client.connect():
-                print("❌ Failed to connect to MongoDB")
-                return
-            
-            print(f"\n🔍 MongoDB Schema Check")
-            print(f"📊 Database: {mongodb_client.db_name}")
-            print(f"📋 Collection: {mongodb_client.users_collection}")
-            
-            # Check a sample user
-            sample_user = mongodb_client.db[mongodb_client.users_collection].find_one()
-            
-            if sample_user:
-                print(f"👤 Sample user: {sample_user.get('username', 'Unknown')}")
-                print(f"📋 User fields: {list(sample_user.keys())}")
+        #         agent = sample_user.get('agent', {})
+        #         if agent:
+        #             print(f"🤖 Agent fields: {list(agent.keys())}")
+        #             print(f"💬 firstChatSentence type: {type(agent.get('firstChatSentence', 'N/A'))}")
+        #         else:
+        #             print(f"❌ No agent field found")
+        #     else:
+        #         print(f"❌ No users found in collection")
                 
-                agent = sample_user.get('agent', {})
-                if agent:
-                    print(f"🤖 Agent fields: {list(agent.keys())}")
-                    print(f"💬 firstChatSentence type: {type(agent.get('firstChatSentence', 'N/A'))}")
-                else:
-                    print(f"❌ No agent field found")
-            else:
-                print(f"❌ No users found in collection")
-                
-        except Exception as e:
-            print(f"❌ Error checking schema: {e}")
-        finally:
-            mongodb_client.disconnect()
+        # except Exception as e:
+        #     print(f"❌ Error checking schema: {e}")
+        # finally:
+        #     mongodb_client.disconnect()
 
     # === PROACTIVE CYCLE METHODS ===
 
@@ -522,7 +434,6 @@ class ResearchService:
         """
         candidates: List[Dict] = []
 
-        # ── Heuristic candidates will be injected here in Phase 4.3–4.5 ────
 
         # ── Topic-based fill (up to MAX_CANDIDATES total) ────────────────────
         # topics = ["technology", "health", "travel", "culture", "sport",
@@ -586,7 +497,7 @@ class ResearchService:
             "interests": [],
             "future_mentions": [],
             "conversation_insight": "",
-            "preferred_language": "he",
+            "preferred_language": "en",
         }
 
         try:
@@ -808,38 +719,38 @@ class ResearchService:
         finally:
             mongodb_client.disconnect()
 
-    def _reset_first_chat_sentence(self, user: dict) -> None:
-        """
-        Restore user.agent.firstChatSentence to the canonical value from the
-        agents collection, clearing the proactive override written by inject_prompt.
-        Called after _create_conversation (success or failure) so the proactive
-        message is never re-used as the opener for manually-started conversations.
-        """
-        try:
-            agent = user.get("agent") or {}
-            agent_id = agent.get("_id")
-            if not agent_id:
-                return
-            if not mongodb_client.connect():
-                return
-            canonical = mongodb_client.db["agents"].find_one(
-                {"_id": ObjectId(str(agent_id))},
-                {"firstChatSentence": 1},
-            )
-            if not canonical:
-                return
-            original = canonical.get("firstChatSentence", "")
-            mongodb_client.db[mongodb_client.users_collection].update_one(
-                {"_id": ObjectId(str(user["_id"]))},
-                {"$set": {"agent.firstChatSentence": original}},
-            )
-        except Exception as e:
-            print(f"⚠️  _reset_first_chat_sentence failed: {e}")
-        finally:
-            try:
-                mongodb_client.disconnect()
-            except Exception:
-                pass
+    # def _reset_first_chat_sentence(self, user: dict) -> None:
+        # """
+        # Restore user.agent.firstChatSentence to the canonical value from the
+        # agents collection, clearing the proactive override written by inject_prompt.
+        # Called after _create_conversation (success or failure) so the proactive
+        # message is never re-used as the opener for manually-started conversations.
+        # """
+        # try:
+        #     agent = user.get("agent") or {}
+        #     agent_id = agent.get("_id")
+        #     if not agent_id:
+        #         return
+        #     if not mongodb_client.connect():
+        #         return
+        #     canonical = mongodb_client.db["agents"].find_one(
+        #         {"_id": ObjectId(str(agent_id))},
+        #         {"firstChatSentence": 1},
+        #     )
+        #     if not canonical:
+        #         return
+        #     original = canonical.get("firstChatSentence", "")
+        #     mongodb_client.db[mongodb_client.users_collection].update_one(
+        #         {"_id": ObjectId(str(user["_id"]))},
+        #         {"$set": {"agent.firstChatSentence": original}},
+        #     )
+        # except Exception as e:
+        #     print(f"⚠️  _reset_first_chat_sentence failed: {e}")
+        # finally:
+        #     try:
+        #         mongodb_client.disconnect()
+        #     except Exception:
+        #         pass
 
     def _create_conversation(self, user_id: str, experiment_id: str, num_conversations: int) -> Optional[str]:
         """
@@ -869,6 +780,320 @@ class ResearchService:
             print(f"⚠️  _create_conversation failed for user {user_id}: {e}")
         return None
 
+    # ── Phase 1 Experiment: message resolution helpers ────────────────────────
+    # These three methods are only called from _resolve_message.
+    # When EXPERIMENT_PHASE_1 is turned off, _resolve_message ignores them
+    # and the system falls back to the generic heuristic priority chain.
+
+    def _generate_affective_default_message(self, memory: Dict, name: str, user_id: str) -> Dict:
+        """
+        Affective group fallback: generate an empathetic check-in when no
+        heuristic has fired this cycle.
+
+        1. Expire emotional memories older than 72 hours (mark used=True).
+        2. Select the best unused memory (highest affective_score, most recent).
+        3. Mark it as used in MongoDB so it is never repeated.
+        4. LLM-generate a personalized check-in (context-rich path) or a gentle
+           cold-start invitation (no unused memories available).
+        """
+        from bson import ObjectId
+
+        preferred_language = memory.get("preferred_language", "he")
+        target_lang = "Hebrew" if preferred_language == "he" else "English"
+        emotional_memories = memory.get("emotional_memories", [])
+
+        # STEP 1: Expire unused memories older than 72 hours
+        now = datetime.now(timezone.utc)
+        expiry_threshold = now - timedelta(hours=72)
+        if emotional_memories:
+            try:
+                if mongodb_client.connect():
+                    result = mongodb_client.db[mongodb_client.users_collection].update_many(
+                        {
+                            "_id": ObjectId(user_id),
+                            "proactiveMemory.emotional_memories": {
+                                "$elemMatch": {
+                                    "used": False,
+                                    "timestamp_iso": {"$lt": expiry_threshold.isoformat()},
+                                }
+                            },
+                        },
+                        {"$set": {"proactiveMemory.emotional_memories.$[elem].used": True}},
+                        array_filters=[{
+                            "elem.used": False,
+                            "elem.timestamp_iso": {"$lt": expiry_threshold.isoformat()},
+                        }],
+                    )
+                    if result.modified_count > 0:
+                        print(f"⏰ Expired {result.modified_count} stale emotional memories for {name}")
+            except Exception as e:
+                print(f"⚠️  Failed to expire old emotional memories: {e}")
+            finally:
+                mongodb_client.disconnect()
+
+        # STEP 2: Select best unused emotional memory
+        unused = [m for m in emotional_memories if not m.get("used", False)]
+        has_context = bool(unused)
+
+        if has_context:
+            best = max(unused, key=lambda m: (
+                m.get("affective_score", 1),
+                m.get("timestamp_iso", "1900-01-01"),
+            ))
+            content = best.get("content", "")
+            score = best.get("affective_score", 1)
+
+            system_prompt = (
+                f"You are an empathetic agent that encourages emotional sharing. "
+                f"Generate a warm, personal emotional check-in in {target_lang} (max 15 words) "
+                f"that directly references this specific emotional memory the user shared. "
+                f"Acknowledge their feelings without being dramatic or clinical. "
+                f"Invite them to share how they're feeling now about this or related topics. "
+                f"You MAY use the user's name once if it feels natural. "
+                f"Return ONLY the final message, no quotes or explanations."
+            )
+            user_prompt = (
+                f"USER NAME: {name}\n"
+                f"SPECIFIC EMOTIONAL MEMORY: {content}\n"
+                f"AFFECTIVE DEPTH: {score}/10\n\n"
+                f"Craft a highly personalized empathetic check-in directly referencing "
+                f"this specific emotional memory. Show that you remember and care about "
+                f"what they shared."
+            )
+            topic_label = "affective_context_rich"
+
+            # STEP 3: Mark this memory as used so it is never repeated
+            try:
+                if mongodb_client.connect():
+                    result = mongodb_client.db[mongodb_client.users_collection].update_one(
+                        {
+                            "_id": ObjectId(user_id),
+                            "proactiveMemory.emotional_memories": {
+                                "$elemMatch": {"content": content, "used": False}
+                            },
+                        },
+                        {"$set": {"proactiveMemory.emotional_memories.$.used": True}},
+                    )
+                    if result.modified_count > 0:
+                        print(f"💛 Marked emotional memory as used for {name}: '{content[:50]}...'")
+                    else:
+                        print(f"⚠️  Memory not found or already used for {name}")
+            except Exception as e:
+                print(f"⚠️  Failed to mark emotional memory as used for {user_id}: {e}")
+            finally:
+                mongodb_client.disconnect()
+
+        else:
+            # Cold Start: no emotional memories — gentle invitation to share
+            system_prompt = (
+                f"You are an empathetic agent that encourages emotional sharing. "
+                f"Generate a gentle, warm invitation in {target_lang} (max 15 words) "
+                f"purely focused on emotional sharing and being a listening ear. "
+                f"Use the user's name naturally. "
+                f"Return ONLY the final message, no quotes or explanations."
+            )
+            user_prompt = (
+                f"USER NAME: {name}\n\n"
+                f"Generate a gentle emotional invitation that lets them know you're here "
+                f"if they need a listening ear today. Focus purely on emotional support."
+            )
+            topic_label = "affective_cold_start"
+            content = ""
+
+        msgs = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        try:
+            generated = self.llm_service._call_llm(msgs, temperature=0.7, max_tokens=80)
+            if (generated.startswith('"') and generated.endswith('"')) or (
+                generated.startswith("'") and generated.endswith("'")
+            ):
+                generated = generated[1:-1].strip()
+            if not generated:
+                raise ValueError("empty LLM response")
+        except Exception as e:
+            print(f"❌ _generate_affective_default_message LLM error: {e}")
+            generated = (
+                f"Hi {name}, I was thinking about what you shared earlier. How are you feeling about it now?"
+                if has_context else
+                f"Hi {name}, just checking in. I'm here if you need a listening ear today."
+            )
+
+        return {
+            "trigger_source": "affective_default",
+            "source": "affective",
+            "topic_label": topic_label,
+            "generated_message": generated,
+            "personalized": has_context,
+            "has_context": has_context,
+        }
+
+    def _build_generic_message(self, name: str, language: str) -> Dict:
+        """
+        Generate a neutral, emotionless chat invitation for the Generic group.
+        Zero emotional weight, no specific topics — just an open door to chat.
+        """
+        target_lang = "Hebrew" if language == "he" else "English"
+        system_prompt = (
+            f"You are a standard assistant. Generate a completely generic, "
+            f"standard invitation to chat in {target_lang} with zero emotional weight "
+            f"and no specific topics (max 15 words). You MAY use the user's name once. "
+            f"Return ONLY the final message."
+        )
+        user_prompt = f"USER NAME: {name}\n\nGenerate a friendly but neutral chat invitation."
+        msgs = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        try:
+            text = self.llm_service._call_llm(msgs, temperature=0.3, max_tokens=50)
+            if text.startswith('"') and text.endswith('"'):
+                text = text[1:-1].strip()
+            return {
+                "trigger_source": "generic_override",
+                "source": "generic",
+                "topic_label": "generic_standard",
+                "generated_message": text or f"Hi {name}, how are you today?",
+                "personalized": False,
+            }
+        except Exception as e:
+            print(f"⚠️  Generic message LLM error: {e}")
+            return {
+                "trigger_source": "generic_override",
+                "source": "generic",
+                "topic_label": "generic_standard",
+                "generated_message": f"Hi {name}, how are you today?",
+                "personalized": False,
+            }
+
+    def _resolve_message(
+        self, *,
+        proactive_group: str,
+        affective_nudge,
+        gap_nudge,
+        temporal_nudge,
+        candidates: List[Dict],
+        memory: Dict,
+        name: str,
+        language: str,
+        user_id: str,
+    ) -> Optional[Dict]:
+        """
+        Single dispatch point: decides what message to send to this user.
+
+        When EXPERIMENT_PHASE_1=true, applies the 3-group experiment logic:
+          - reactive  → None (skip this user entirely)
+          - generic   → neutral, emotionless chat invitation via _build_generic_message
+          - affective → heuristic-driven if any fired; else emotional default via
+                        _generate_affective_default_message (cold-start or context-rich)
+
+        When EXPERIMENT_PHASE_1=false (or unset), falls through to the generic
+        heuristic priority chain (affective → gap → temporal → topic fallback),
+        which works for any user regardless of group assignment.
+
+        Returns a message dict ready for inject + FCM, or None to skip the user.
+        """
+        PHASE1 = os.getenv("EXPERIMENT_PHASE_1", "false").lower() == "true"
+
+        if PHASE1:
+            if proactive_group == "reactive":
+                print(f"🚫 [{name}] Reactive group — skipping")
+                return None
+
+            elif proactive_group == "generic":
+                print(f"🔄 [{name}] Generic group — neutral invitation")
+                return self._build_generic_message(name, language)
+
+            elif proactive_group == "affective":
+                # If a heuristic fired, fall through to the priority chain below.
+                # If nothing fired, generate the affective-specific default.
+                if not (affective_nudge or gap_nudge or temporal_nudge):
+                    print(f"🧠 [{name}] Affective group — no heuristic fired, generating empathetic default")
+                    return self._generate_affective_default_message(memory, name, user_id)
+                # else: fall through to heuristic chain
+
+        # ── Generic heuristic priority: affective → gap → temporal → topic ──
+        if affective_nudge:
+            print(f"💛 Affective heuristic fired for {name}: {affective_nudge.emotion} ({affective_nudge.intensity:.2f})")
+            seed = (
+                f"The user seemed {affective_nudge.emotion} in their last "
+                f"conversation. Send a warm, gentle check-in in the user's language."
+            )
+            ctx = NudgeContext(
+                trigger_source="affective",
+                name=name,
+                preferred_language=language,
+                seed_message=seed,
+                topic_label="affective",
+                source="affective",
+                payload={
+                    "emotion": affective_nudge.emotion,
+                    "intensity": affective_nudge.intensity,
+                    "insight": memory.get("conversation_insight", ""),
+                },
+            )
+            return self._personalize_context(ctx)
+
+        elif gap_nudge:
+            print(f"🔍 Behavioural-gap heuristic fired for {name}: '{gap_nudge.intent_text[:50]}'")
+            seed = (
+                f"The user said they planned to '{gap_nudge.intent_text}' "
+                f"but hasn't mentioned it since. Ask gently how it went, "
+                f"in the user's language."
+            )
+            ctx = NudgeContext(
+                trigger_source="behavioural_gap",
+                name=name,
+                preferred_language=language,
+                seed_message=seed,
+                topic_label="behavioural_gap",
+                source="behavioural_gap",
+                payload={"intent_text": gap_nudge.intent_text},
+            )
+            return self._personalize_context(ctx)
+
+        elif temporal_nudge:
+            print(
+                f"🕐 Temporal heuristic fired for {name}: "
+                f"'{temporal_nudge.mention_text[:40]}' ({temporal_nudge.hours_until:.1f}h away)"
+            )
+            seed = (
+                f"The user mentioned '{temporal_nudge.mention_text}' "
+                f"is coming up in about {int(temporal_nudge.hours_until)} hours."
+            )
+            ctx = NudgeContext(
+                trigger_source="temporal",
+                name=name,
+                preferred_language=language,
+                seed_message=seed,
+                topic_label="temporal",
+                source="temporal",
+                payload={
+                    "mention_text": temporal_nudge.mention_text,
+                    "hours_until": round(temporal_nudge.hours_until, 1),
+                },
+            )
+            return self._personalize_context(ctx)
+
+        else:
+            # No heuristic fired: use topic-based fallback from the candidate pool
+            chosen = self.select_message_for_user(candidates, memory)
+            if chosen:
+                ctx = NudgeContext(
+                    trigger_source="topic",
+                    name=name,
+                    preferred_language=language,
+                    seed_message=chosen.get("generated_message", ""),
+                    topic_label=chosen.get("topic_label", "topic"),
+                    source=chosen.get("source", "topic"),
+                    payload={"topic_label": chosen.get("topic_label", "topic")},
+                )
+                return self._personalize_context(ctx)
+            return None
+
+    # ─────────────────────────────────────────────────────────────────────────
+
     def coordinated_send_and_inject(self, candidates: List[Dict], users: List[Dict], cycle_id: str) -> Dict:
         """
         For each eligible user, pick the best candidate from the pool,
@@ -882,7 +1107,7 @@ class ResearchService:
             "details": []
         }
 
-        print(f"📱 Sending to {len(users)} users from pool of {len(candidates)} candidates...")
+        print(f"📱 Sending to {len(users)} users")
 
         for user in users:
             user_id = str(user["_id"])
@@ -970,7 +1195,7 @@ class ResearchService:
                     print(
                         f"🧠 [{username}] interests={len(memory.get('interests') or [])} "
                         f"future_mentions={len(memory.get('future_mentions') or [])} "
-                        f"lang={memory.get('preferred_language', 'he')}"
+                        f"lang={memory.get('preferred_language', 'en')}"
                     )
             except Exception as e:
                 print(f"⚠️  Could not build memory for {username}: {e}")
@@ -1028,171 +1253,24 @@ class ResearchService:
                 f"open_intents={len(memory_pm.get('open_intents') or [])}"
             )
 
-            # ── Strict Context Isolation (PROACTIVE_NOTIFICATIONS.md § 3a) ──
-            # The ONE winning heuristic builds a self-contained NudgeContext
-            # carrying only the fields its message needs. The LLM never sees the
-            # full proactiveMemory, so unrelated signals can't bleed in.
+            # ── Resolve final message via single dispatch point ───────────────
             name = (memory.get("demographics") or {}).get("name") or username
             language = memory.get("preferred_language", "he")
 
-            if affective_nudge:
-                print(
-                    f"💛 Affective heuristic fired for {username}: "
-                    f"{affective_nudge.emotion} ({affective_nudge.intensity:.2f})"
-                )
-                seed = (
-                    f"The user seemed {affective_nudge.emotion} in their last "
-                    f"conversation. Send a warm, gentle check-in in the user's language."
-                )
-                ctx = NudgeContext(
-                    trigger_source="affective",
-                    name=name,
-                    preferred_language=language,
-                    seed_message=seed,
-                    topic_label="affective",
-                    source="affective",
-                    payload={
-                        "emotion": affective_nudge.emotion,
-                        "intensity": affective_nudge.intensity,
-                        "insight": memory.get("conversation_insight", ""),
-                    },
-                )
-                message = self._personalize_context(ctx)
+            message = self._resolve_message(
+                proactive_group=proactive_group,
+                affective_nudge=affective_nudge,
+                gap_nudge=gap_nudge,
+                temporal_nudge=temporal_nudge,
+                candidates=candidates,
+                memory=memory,
+                name=name,
+                language=language,
+                user_id=user_id,
+            )
 
-            elif gap_nudge:
-                print(
-                    f"🔍 Behavioural-gap heuristic fired for {username}: "
-                    f"'{gap_nudge.intent_text[:50]}'"
-                )
-                seed = (
-                    f"The user said they planned to '{gap_nudge.intent_text}' "
-                    f"but hasn't mentioned it since. Ask gently how it went, "
-                    f"in the user's language."
-                )
-                ctx = NudgeContext(
-                    trigger_source="behavioural_gap",
-                    name=name,
-                    preferred_language=language,
-                    seed_message=seed,
-                    topic_label="behavioural_gap",
-                    source="behavioural_gap",
-                    payload={"intent_text": gap_nudge.intent_text},
-                )
-                message = self._personalize_context(ctx)
-
-            elif temporal_nudge:
-                print(
-                    f"🕐 Temporal heuristic fired for {username}: "
-                    f"'{temporal_nudge.mention_text[:40]}' "
-                    f"({temporal_nudge.hours_until:.1f}h away)"
-                )
-                seed = (
-                    f"The user mentioned '{temporal_nudge.mention_text}' "
-                    f"is coming up in about {int(temporal_nudge.hours_until)} hours."
-                )
-                ctx = NudgeContext(
-                    trigger_source="temporal",
-                    name=name,
-                    preferred_language=language,
-                    seed_message=seed,
-                    topic_label="temporal",
-                    source="temporal",
-                    payload={
-                        "mention_text": temporal_nudge.mention_text,
-                        "hours_until": round(temporal_nudge.hours_until, 1),
-                    },
-                )
-                message = self._personalize_context(ctx)
-
-            else:
-                # ── No heuristic fired: use existing topic-based logic (will be overridden by gatekeeper) ─
-                chosen = self.select_message_for_user(candidates, memory)
-                if chosen:
-                    ctx = NudgeContext(
-                        trigger_source="topic",
-                        name=name,
-                        preferred_language=language,
-                        seed_message=chosen.get("generated_message", ""),
-                        topic_label=chosen.get("topic_label", "topic"),
-                        source=chosen.get("source", "topic"),
-                        payload={"topic_label": chosen.get("topic_label", "topic")},
-                    )
-                    message = self._personalize_context(ctx)
-                else:
-                    message = None
-            
-            # ── GATEKEEPER: Proactive Group Safety Filter ────────────────────────────
-            # Respect which heuristics are on/off via dashboard, BUT apply final group override
-            
-            if proactive_group == 'reactive':
-                # Reactive group: NEVER send proactive notifications
-                print(f"🚫 [{username}] Reactive group - aborting proactive notification")
-                continue
-                
-            elif proactive_group == 'generic':
-                # Generic group: Override with standard assistant prompt (zero emotional weight)
-                print(f"🔄 [{username}] Generic group override - replacing with standard invitation")
-                seed = f"Hi {name}, I'm here if you'd like to chat today."
-                ctx = NudgeContext(
-                    trigger_source="generic_override",
-                    name=name,
-                    preferred_language=language,
-                    seed_message=seed,
-                    topic_label="generic_standard",
-                    source="generic",
-                    payload={"group": "generic"},
-                )
-                # Use personalize_from_context with generic framing
-                system_prompt = (
-                    f"You are a standard assistant. Generate a completely generic, "
-                    f"standard invitation to chat in {'Hebrew' if language == 'he' else 'English'} with zero emotional weight "
-                    f"and no specific topics (max 15 words). You MAY use the user's name once. "
-                    f"Return ONLY the final message."
-                )
-                user_prompt = f"USER NAME: {name}\n\nGenerate a friendly but neutral chat invitation."
-                
-                msgs = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ]
-                try:
-                    generic_text = self.llm_service._call_llm(msgs, temperature=0.3, max_tokens=50)
-                    if (generic_text.startswith('"') and generic_text.endswith('"')):
-                        generic_text = generic_text[1:-1].strip()
-                    message = {
-                        "trigger_source": "generic_override",
-                        "source": "generic",
-                        "topic_label": "generic_standard", 
-                        "generated_message": generic_text or f"Hi {name}, how are you today?",
-                        "personalized": False,
-                    }
-                except Exception as e:
-                    print(f"⚠️ Generic override LLM error: {e}")
-                    message = {
-                        "trigger_source": "generic_override",
-                        "source": "generic", 
-                        "topic_label": "generic_standard",
-                        "generated_message": f"Hi {name}, how are you today?",
-                        "personalized": False,
-                    }
-                
-            elif proactive_group == 'affective':
-                # Affective group: Use affective heuristic for strict emotional framing
-                if not (affective_nudge or gap_nudge or temporal_nudge):
-                    # No heuristic fired - use affective default generator
-                    print(f"🧠 [{username}] Affective group - generating empathetic default")
-                    affective_result = affective.generate_affective_default(memory, name, user_id, self.llm_service, mongodb_client)
-                    message = {
-                        "trigger_source": affective_result["trigger_source"],
-                        "source": affective_result["source"],
-                        "topic_label": affective_result["topic_label"],
-                        "generated_message": affective_result["generated_message"],
-                        "personalized": affective_result["personalized"],
-                        "has_context": affective_result["has_context"],
-                    }
-                # If heuristic already fired, keep the existing message (already processed above)
             if not message:
-                print(f"⚠️  No candidate available for {username}, skipping")
+                print(f"⏭️  [{username}] skipped (reactive group or no candidate)")
                 continue
 
             tag = "✨personalized" if message.get("personalized") else "default"
@@ -1313,162 +1391,165 @@ class ResearchService:
         finally:
             mongodb_client.disconnect()
     
-    def run_oxford_demo_cycle(self) -> Dict:
-        """
-        Conference Demo Bypass.
+    # def run_oxford_demo_cycle(self) -> Dict:
+        # """
+        # Conference Demo Bypass.
 
-        Sends 3 hardcoded FCM messages to all users in DEMO_EXPERIMENT_ID
-        at fixed wall-clock times, completely bypassing LLM personalisation.
-        Tracks progress via `demo_msgs_sent_count` on the user document.
-        Sets `is_demo_finished: True` after the 3rd message is delivered.
+        # Sends 3 hardcoded FCM messages to all users in DEMO_EXPERIMENT_ID
+        # at fixed wall-clock times, completely bypassing LLM personalisation.
+        # Tracks progress via `demo_msgs_sent_count` on the user document.
+        # Sets `is_demo_finished: True` after the 3rd message is delivered.
         
-        **IMPORTANT:** Assumes MongoDB connection is already open by the caller
-        (e.g., run_cycle.py or scheduler.py). Does NOT call connect() or disconnect()
-        to avoid interfering with the shared connection lifecycle.
+        # **IMPORTANT:** Assumes MongoDB connection is already open by the caller
+        # (e.g., run_cycle.py or scheduler.py). Does NOT call connect() or disconnect()
+        # to avoid interfering with the shared connection lifecycle.
         
-        For each demo message:
-        1. Inject the message into agent.firstChatSentence (same as standard cycle)
-        2. Pre-create a conversation so we have a conversationId for deep-linking
-        3. Send FCM with conversationId in the data payload
-        4. Update demo progress tracking
-        """
-        now = datetime.now()
-        sent_count = 0
+        # For each demo message:
+        # 1. Inject the message into agent.firstChatSentence (same as standard cycle)
+        # 2. Pre-create a conversation so we have a conversationId for deep-linking
+        # 3. Send FCM with conversationId in the data payload
+        # 4. Update demo progress tracking
+        # """
+        # now = datetime.now()
+        # sent_count = 0
 
-        print(f"\n=== 🎯 Oxford Demo Cycle ({now.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+        # print(f"\n=== 🎯 Oxford Demo Cycle ({now.strftime('%Y-%m-%d %H:%M:%S')}) ===")
 
-        try:
-            # Ensure MongoDB connection is established
-            if mongodb_client.db is None:
-                if not mongodb_client.connect():
-                    print("❌ Demo cycle: failed to connect to MongoDB")
-                    return {"success": False, "error": "MongoDB connect failed"}
+        # try:
+        #     # Ensure MongoDB connection is established
+        #     if mongodb_client.db is None:
+        #         if not mongodb_client.connect():
+        #             print("❌ Demo cycle: failed to connect to MongoDB")
+        #             return {"success": False, "error": "MongoDB connect failed"}
 
-            demo_id_variants = [DEMO_EXPERIMENT_ID, ObjectId(DEMO_EXPERIMENT_ID)]
-            demo_users = list(mongodb_client.db[mongodb_client.users_collection].find({
-                "experimentId": {"$in": demo_id_variants},
-                "fcmToken": {"$exists": True, "$ne": ""},
-                "is_demo_finished": {"$ne": True},
-            }))
+        #     demo_id_variants = [DEMO_EXPERIMENT_ID, ObjectId(DEMO_EXPERIMENT_ID)]
+        #     demo_users = list(mongodb_client.db[mongodb_client.users_collection].find({
+        #         "experimentId": {"$in": demo_id_variants},
+        #         "fcmToken": {"$exists": True, "$ne": ""},
+        #         "is_demo_finished": {"$ne": True},
+        #     }))
 
-            print(f"👥 Demo cycle: {len(demo_users)} active demo participant(s)")
+        #     print(f"👥 Demo cycle: {len(demo_users)} active demo participant(s)")
 
-            for user in demo_users:
-                user_id   = str(user["_id"])
-                username  = user.get("username", "Unknown")
-                fcm_token = user.get("fcmToken", "")
-                msgs_sent = user.get("demo_msgs_sent_count", 0)
-                experiment_id_str = str(user.get("experimentId", ""))
-                num_convs = int(user.get("numberOfConversations") or 0)
+        #     for user in demo_users:
+        #         user_id   = str(user["_id"])
+        #         username  = user.get("username", "Unknown")
+        #         fcm_token = user.get("fcmToken", "")
+        #         msgs_sent = user.get("demo_msgs_sent_count", 0)
+        #         experiment_id_str = str(user.get("experimentId", ""))
+        #         num_convs = int(user.get("numberOfConversations") or 0)
 
-                print(f"\n👤 Demo user: {username} (messages sent so far: {msgs_sent}/{len(DEMO_MESSAGES)})")
+        #         print(f"\n👤 Demo user: {username} (messages sent so far: {msgs_sent}/{len(DEMO_MESSAGES)})")
 
-                for idx, msg in enumerate(DEMO_MESSAGES):
-                    # Safety check: Skip if already sent
-                    if idx < msgs_sent:
-                        continue
+        #         for idx, msg in enumerate(DEMO_MESSAGES):
+        #             # Safety check: Skip if already sent
+        #             if idx < msgs_sent:
+        #                 continue
 
-                    # Time check: Skip if not yet due
-                    send_after = datetime.fromisoformat(msg["send_after"])
-                    if now < send_after:
-                        break  # scheduled time not yet reached for this message
+        #             # Time check: Skip if not yet due
+        #             send_after = datetime.fromisoformat(msg["send_after"])
+        #             if now < send_after:
+        #                 break  # scheduled time not yet reached for this message
 
-                    try:
-                        # Step 1: Inject the demo message as firstChatSentence
-                        injection_result = self.inject_prompt(user_id, msg["text"])
-                        if injection_result:
-                            print(f"💬 Demo: message injected for {username}")
-                        else:
-                            print(f"⚠️  Demo: inject_prompt failed for {username} — will still send FCM")
+        #             try:
+        #                 # Step 1: Inject the demo message as firstChatSentence
+        #                 injection_result = self.inject_prompt(user_id, msg["text"])
+        #                 if injection_result:
+        #                     print(f"💬 Demo: message injected for {username}")
+        #                 else:
+        #                     print(f"⚠️  Demo: inject_prompt failed for {username} — will still send FCM")
 
-                        # Step 2: Pre-create conversation for deep-linking
-                        conversation_id = self._create_conversation(user_id, experiment_id_str, num_convs)
-                        if conversation_id:
-                            print(f"📝 Demo: pre-created conversation {conversation_id}")
-                        else:
-                            print(f"⚠️  Demo: could not pre-create conversation for {username}")
+        #                 # Step 2: Pre-create conversation for deep-linking
+        #                 conversation_id = self._create_conversation(user_id, experiment_id_str, num_convs)
+        #                 if conversation_id:
+        #                     print(f"📝 Demo: pre-created conversation {conversation_id}")
+        #                 else:
+        #                     print(f"⚠️  Demo: could not pre-create conversation for {username}")
 
-                        # Step 3: Send FCM with deep-link data
-                        from core.models import UserContext
-                        fcm_extra = {}
-                        if conversation_id and experiment_id_str:
-                            fcm_extra = {
-                                "conversationId": conversation_id,
-                                "experimentId": experiment_id_str,
-                            }
+        #                 # Step 3: Send FCM with deep-link data
+        #                 from core.models import UserContext
+        #                 fcm_extra = {}
+        #                 if conversation_id and experiment_id_str:
+        #                     fcm_extra = {
+        #                         "conversationId": conversation_id,
+        #                         "experimentId": experiment_id_str,
+        #                     }
 
-                        notification_result = self.fcm_service.send_to_user(
-                            user=UserContext(
-                                user_id=user_id,
-                                name=username,
-                                fcm_token=fcm_token,
-                            ),
-                            body=msg["text"],
-                            title="Lexi",
-                            extra_data=fcm_extra if fcm_extra else None,
-                        )
+        #                 notification_result = self.fcm_service.send_to_user(
+        #                     user=UserContext(
+        #                         user_id=user_id,
+        #                         name=username,
+        #                         fcm_token=fcm_token,
+        #                     ),
+        #                     body=msg["text"],
+        #                     title="Lexi",
+        #                     extra_data=fcm_extra if fcm_extra else None,
+        #                 )
 
-                        if not notification_result:
-                            print(f"❌ Demo: FCM failed for {username}")
-                            break  # Stop this user's messages on FCM failure
+        #                 if not notification_result:
+        #                     print(f"❌ Demo: FCM failed for {username}")
+        #                     break  # Stop this user's messages on FCM failure
 
-                        # The injection helper functions likely closed the connection internally.
-                        # We must forcefully re-establish it before our atomic update.
-                        mongodb_client.connect()
+        #                 # The injection helper functions likely closed the connection internally.
+        #                 # We must forcefully re-establish it before our atomic update.
+        #                 mongodb_client.connect()
 
-                        # Step 4: IMMEDIATELY update database with new count
-                        new_count = idx + 1
-                        is_complete = (new_count >= len(DEMO_MESSAGES))
+        #                 # Step 4: IMMEDIATELY update database with new count
+        #                 new_count = idx + 1
+        #                 is_complete = (new_count >= len(DEMO_MESSAGES))
 
-                        # ATOMIC UPDATE: Always update demo_msgs_sent_count, and set is_demo_finished if complete
-                        update_payload = {"$set": {"demo_msgs_sent_count": new_count}}
-                        if is_complete:
-                            update_payload["$set"]["is_demo_finished"] = True
+        #                 # ATOMIC UPDATE: Always update demo_msgs_sent_count, and set is_demo_finished if complete
+        #                 update_payload = {"$set": {"demo_msgs_sent_count": new_count}}
+        #                 if is_complete:
+        #                     update_payload["$set"]["is_demo_finished"] = True
 
-                        mongodb_client.db[mongodb_client.users_collection].update_one(
-                            {"_id": user["_id"]},
-                            update_payload,
-                        )
+        #                 mongodb_client.db[mongodb_client.users_collection].update_one(
+        #                     {"_id": user["_id"]},
+        #                     update_payload,
+        #                 )
 
-                        print(f"✅ Demo: FCM sent (message #{idx + 1}/{len(DEMO_MESSAGES)}) for {username}")
+        #                 print(f"✅ Demo: FCM sent (message #{idx + 1}/{len(DEMO_MESSAGES)}) for {username}")
 
-                        if is_complete:
-                            print(f"🔒 Demo: LOCKED OUT after all {len(DEMO_MESSAGES)} messages for {username} (is_demo_finished=True)")
-                            break  # Stop message loop, move to next user
+        #                 if is_complete:
+        #                     print(f"🔒 Demo: LOCKED OUT after all {len(DEMO_MESSAGES)} messages for {username} (is_demo_finished=True)")
+        #                     break  # Stop message loop, move to next user
 
-                        sent_count += 1
-                        msgs_sent = new_count
+        #                 sent_count += 1
+        #                 msgs_sent = new_count
 
-                    except Exception as fcm_err:
-                        print(f"❌ Demo error for {username}: {fcm_err}")
-                        break  # stop processing this user on failure
+        #             except Exception as fcm_err:
+        #                 print(f"❌ Demo error for {username}: {fcm_err}")
+        #                 break  # stop processing this user on failure
 
-            print(f"=== 🎯 Demo Cycle done — {sent_count} FCM sent ===\n")
-            return {"success": True, "sent": sent_count}
+        #     print(f"=== 🎯 Demo Cycle done — {sent_count} FCM sent ===\n")
+        #     return {"success": True, "sent": sent_count}
 
-        except Exception as e:
-            print(f"❌ Demo cycle unhandled error: {e}")
-            traceback.print_exc()
-            return {"success": False, "error": str(e)}
+        # except Exception as e:
+        #     print(f"❌ Demo cycle unhandled error: {e}")
+        #     traceback.print_exc()
+        #     return {"success": False, "error": str(e)}
 
     def run_full_proactive_cycle(self) -> Dict:
-        """Main orchestrator for proactive research cycle"""
+        """
+        Main orchestrator. Called by run_cycle.py (Render cron) and scheduler.py.
+
+        Step 0 — expire any injected firstChatSentence overrides whose window has passed.
+        Step 1 — build a topic-based candidate pool (used as fallback when no heuristic fires).
+        Step 2 — get eligible users (rate-limited).
+        Step 3 — for each user: build memory, run heuristic scans, evaluate heuristics,
+                  resolve message via _resolve_message, inject + send FCM.
+        """
         cycle_id = str(uuid.uuid4())
         start_time = datetime.now()
 
         print(f"\n=== 🚀 Starting Proactive Cycle {cycle_id[:8]}... ===")
 
         try:
-            # Step 0: Restore any firstChatSentence overrides whose 2-hour window
-            # has expired since the last cycle.
+            # Step 0: Restore expired firstChatSentence overrides
             self.expire_injected_prompts()
 
-            # Step 1: Build candidate pool (news + topic fill)
+            # Step 1: Build topic-based fallback candidate pool
             candidates = self.build_candidate_pool()
-
-            if not candidates:
-                print("❌ Could not build any candidates")
-                return {"success": False, "message": "No candidates generated"}
 
             # Step 2: Get eligible users (rate-limit checked)
             eligible_users = self.get_proactive_users_with_rate_limit(cycle_id)
@@ -1477,15 +1558,13 @@ class ResearchService:
                 print("❌ No eligible users found")
                 return {"success": False, "message": "No eligible users found"}
 
-            # Step 3: Send and inject (per-user candidate selection inside)
+            # Step 3: Per-user heuristic evaluation, message resolution, send
             results = self.coordinated_send_and_inject(candidates, eligible_users, cycle_id)
 
-            end_time = datetime.now()
-            duration = (end_time - start_time).total_seconds()
-
+            duration = (datetime.now() - start_time).total_seconds()
             print(f"\n✅ Proactive Cycle Complete!")
             print(f"📊 Results: {results['fcm_sent']} FCM sent, {results['injected']} injected")
-            print(f"⏱️ Duration: {duration:.2f} seconds")
+            print(f"⏱️  Duration: {duration:.2f}s")
 
             return {
                 "success": True,
@@ -1501,7 +1580,7 @@ class ResearchService:
             return {
                 "success": False,
                 "cycle_id": cycle_id,
-                "error": str(e)
+                "error": str(e),
             }
 
 _instance: Optional["ResearchService"] = None
