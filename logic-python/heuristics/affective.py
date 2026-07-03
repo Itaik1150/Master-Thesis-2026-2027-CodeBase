@@ -221,4 +221,254 @@ def clear_followup(user_id: str, mongodb_client) -> None:
         print(f"⚠️  affective.clear_followup error for {user_id}: {e}")
 
 
+# ── AffectiveHeuristic class (Task 3.2) ───────────────────────────────────────
+# The module-level functions above (analyze_and_schedule, evaluate, clear_followup)
+# are kept for backward compatibility and will be removed in Task 5.2.
+
+import json
+from bson import ObjectId as _ObjectId
+
+from heuristics.base_heuristic import BaseHeuristic
+
+
+class AffectiveHeuristic(BaseHeuristic):
+    """
+    Detects emotional content in recent conversations and generates an
+    empathetic check-in. Always produces a message (cold-start fallback
+    ensures there is always something to send when affective is selected).
+
+    Memory field: proactiveMemory.emotional_memories
+      List of {content, affective_score (1-10), timestamp_iso, used: bool}
+
+    Deduplication: last_affective_analyzed_msg_count tracks how many user
+    messages have been processed; create_memory() skips if none are new.
+    """
+
+    DEFAULT_MEMORY_PROMPT = (
+        "You analyze conversation messages for deep emotional content.\n"
+        "Extract emotional expressions, personal struggles, vulnerable shares, "
+        "and meaningful life events shared by the user.\n\n"
+        "For each genuine emotional share, produce an object with:\n"
+        '  "content":        exact quote or close paraphrase of the emotional share\n'
+        '  "affective_score": integer 1–10 (1=mildly emotional, 10=deeply personal/distressing)\n'
+        '  "timestamp_iso":  use today\'s ISO datetime for all items\n'
+        '  "used":           false\n\n'
+        "Return ONLY valid JSON: {\"emotional_memories\": [...]}\n"
+        "Exclude casual mentions, surface-level topics, or purely factual statements.\n"
+        'Return {"emotional_memories": []} if no genuine emotional content is present.'
+    )
+
+    DEFAULT_MESSAGE_PROMPT = (
+        "You are an empathetic assistant that encourages emotional sharing.\n"
+        "Generate a warm, personal emotional check-in in {language} (max 15 words) "
+        "that directly references the specific emotional memory the user shared.\n"
+        "Acknowledge their feelings without being dramatic or clinical.\n"
+        "Invite them to share how they are feeling about it now.\n"
+        "You MAY use the user's name once if it feels natural.\n"
+        "Return ONLY the final message, no quotes or explanations."
+    )
+
+    _COLD_START_PROMPT = (
+        "You are an empathetic assistant that encourages emotional sharing.\n"
+        "Generate a gentle, warm invitation in {language} (max 15 words) "
+        "focused on emotional support and being a listening ear today.\n"
+        "Use the user's name naturally.\n"
+        "Return ONLY the final message, no quotes or explanations."
+    )
+
+    _MEMORY_EXPIRY_HOURS: int = 72
+    _CONV_SCAN_LIMIT: int = 3
+
+    def create_memory(self) -> None:
+        """
+        Scan the last N conversations for unprocessed user messages.
+        Extract emotional_memories via LLM and push new ones to MongoDB.
+        Skips entirely if no new messages since the last analysis run.
+        """
+        memory = self._memory
+        last_count = int(memory.get("last_affective_analyzed_msg_count") or 0)
+        all_texts = []
+
+        # ── Phase A: Read messages ─────────────────────────────────────────────
+        try:
+            if not self.mongodb_client.connect():
+                return
+            recent_metas = list(self.mongodb_client.db["metadata_conversations"].find(
+                {"userId": self.user_id},
+                sort=[("createdAt", -1)],
+                limit=self._CONV_SCAN_LIMIT,
+            ))
+            if not recent_metas:
+                return
+            for meta in recent_metas:
+                conv_id = str(meta["_id"])
+                raw = list(self.mongodb_client.db["conversations"].find(
+                    {"conversationId": conv_id, "role": "user"},
+                    sort=[("messageNumber", 1)],
+                ))
+                all_texts.extend([m.get("content", "") for m in raw if m.get("content")])
+        except Exception as e:
+            print(f"⚠️  AffectiveHeuristic.create_memory read ({self.username}): {e}")
+            return
+        finally:
+            self.mongodb_client.disconnect()
+
+        current_count = len(all_texts)
+        if current_count == 0 or current_count <= last_count:
+            return  # No new messages to analyze
+
+        # ── Phase B: LLM extraction (outside DB connection) ────────────────────
+        today_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        joined = "\n".join(f"- {m}" for m in all_texts[-20:] if m)
+        system = self.memory_prompt.replace("{today_iso}", today_iso)
+
+        new_memories = []
+        try:
+            raw_text = self.llm_service.call_with_prompt(
+                system=system,
+                user_content=f"User messages:\n{joined}",
+                json_mode=True,
+                max_tokens=600,
+            )
+            parsed = json.loads(raw_text)
+            for item in (parsed.get("emotional_memories") or []):
+                content = (item.get("content") or "").strip()
+                if content:
+                    new_memories.append({
+                        "content":        content,
+                        "affective_score": max(1, min(10, int(item.get("affective_score") or 1))),
+                        "timestamp_iso":  item.get("timestamp_iso") or today_iso,
+                        "used":           False,
+                    })
+        except Exception as e:
+            print(f"⚠️  AffectiveHeuristic.create_memory LLM ({self.username}): {e}")
+
+        # ── Phase C: Write to MongoDB ──────────────────────────────────────────
+        try:
+            if not self.mongodb_client.connect():
+                return
+            update: dict = {
+                "$set": {"proactiveMemory.last_affective_analyzed_msg_count": current_count}
+            }
+            if new_memories:
+                update["$push"] = {
+                    "proactiveMemory.emotional_memories": {"$each": new_memories}
+                }
+                print(f"💛 [{self.username}] Extracted {len(new_memories)} new emotional memory(ies)")
+            self.mongodb_client.db[self.mongodb_client.users_collection].update_one(
+                {"_id": _ObjectId(self.user_id)}, update
+            )
+        except Exception as e:
+            print(f"⚠️  AffectiveHeuristic.create_memory write ({self.username}): {e}")
+        finally:
+            self.mongodb_client.disconnect()
+
+    def get_proactive_message(self) -> Optional[str]:
+        """
+        Always returns a message string:
+        - context-rich path: picks the best unused emotional memory and generates
+          a personalised empathetic check-in referencing it
+        - cold-start path: no memories available → warm generic invitation to share
+        """
+        self.create_memory()
+        self._reload_user()
+
+        emotional_memories = list(self._memory.get("emotional_memories") or [])
+        now = datetime.now(timezone.utc)
+        expiry_threshold = now - timedelta(hours=self._MEMORY_EXPIRY_HOURS)
+
+        # Expire stale unused memories so old content is never resurfaced
+        try:
+            if emotional_memories and self.mongodb_client.connect():
+                self.mongodb_client.db[self.mongodb_client.users_collection].update_many(
+                    {
+                        "_id": _ObjectId(self.user_id),
+                        "proactiveMemory.emotional_memories": {
+                            "$elemMatch": {
+                                "used": False,
+                                "timestamp_iso": {"$lt": expiry_threshold.isoformat()},
+                            }
+                        },
+                    },
+                    {"$set": {"proactiveMemory.emotional_memories.$[elem].used": True}},
+                    array_filters=[{
+                        "elem.used": False,
+                        "elem.timestamp_iso": {"$lt": expiry_threshold.isoformat()},
+                    }],
+                )
+        except Exception as e:
+            print(f"⚠️  AffectiveHeuristic expire memories ({self.username}): {e}")
+        finally:
+            self.mongodb_client.disconnect()
+
+        # Pick best unused memory (highest affective_score, then most recent)
+        unused = [m for m in emotional_memories if not m.get("used", False)]
+        has_context = bool(unused)
+
+        if has_context:
+            best = max(unused, key=lambda m: (
+                m.get("affective_score", 1),
+                m.get("timestamp_iso", "1900-01-01"),
+            ))
+            content = best.get("content", "")
+            score   = best.get("affective_score", 1)
+            system  = self.message_prompt.replace("{language}", self._target_lang)
+            user_content = (
+                f"USER NAME: {self.name}\n"
+                f"EMOTIONAL MEMORY: {content}\n"
+                f"AFFECTIVE DEPTH: {score}/10\n\n"
+                "Craft a highly personalised empathetic check-in referencing this memory."
+            )
+            # Mark this memory as used before generating (fire-once guarantee)
+            try:
+                if self.mongodb_client.connect():
+                    self.mongodb_client.db[self.mongodb_client.users_collection].update_one(
+                        {
+                            "_id": _ObjectId(self.user_id),
+                            "proactiveMemory.emotional_memories": {
+                                "$elemMatch": {"content": content, "used": False}
+                            },
+                        },
+                        {"$set": {"proactiveMemory.emotional_memories.$.used": True}},
+                    )
+                    print(f"💛 [{self.username}] Marked emotional memory as used: '{content[:50]}'")
+            except Exception as e:
+                print(f"⚠️  AffectiveHeuristic mark-used ({self.username}): {e}")
+            finally:
+                self.mongodb_client.disconnect()
+        else:
+            # Cold start: no unused memories → generic warm invitation
+            system = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            user_content = (
+                f"USER NAME: {self.name}\n\n"
+                "Generate a gentle emotional invitation letting them know you are "
+                "here as a listening ear today."
+            )
+
+        try:
+            text = self.llm_service.call_with_prompt(
+                system=system,
+                user_content=user_content,
+                temperature=0.7,
+                max_tokens=80,
+            )
+            if text and len(text) >= 2 and text[0] in ('"', "'") and text[0] == text[-1]:
+                text = text[1:-1].strip()
+            if not text:
+                raise ValueError("empty LLM response")
+            return text
+        except Exception as e:
+            print(f"⚠️  AffectiveHeuristic message LLM ({self.username}): {e}")
+            return (
+                f"Hi {self.name}, I was thinking about what you shared. "
+                "How are you feeling about it now?"
+                if has_context else
+                f"Hi {self.name}, just checking in — I'm here if you need a listening ear."
+            )
+
+    def clear_after_send(self) -> None:
+        """Clear pending_affective_followup if it still exists (backward compat)."""
+        clear_followup(self.user_id, self.mongodb_client)
+
+
 

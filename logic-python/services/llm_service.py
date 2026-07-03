@@ -37,6 +37,22 @@ class ProactiveLogic:
                 raise ValueError("OPENAI_API_KEY not found in environment variables")
 
         print(f"🤖 LLM engine: {self.provider.upper()} / {self.model}")
+        self._log_api_key_status()
+
+    def _log_api_key_status(self) -> None:
+        """
+        Print a startup summary of which API keys are configured.
+        Both keys can coexist in the environment (e.g. OpenAI default,
+        Anthropic available for override_model() mid-cycle).
+        Called once at __init__ and once after each override_model() switch.
+        """
+        openai_key    = os.getenv("OPENAI_API_KEY", "")
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+        print(
+            f"   🔑 API keys: "
+            f"OpenAI={'✅ set' if openai_key else '❌ missing'} | "
+            f"Anthropic={'✅ set' if anthropic_key else '❌ missing'}"
+        )
 
     def override_model(self, model: str):
         """
@@ -58,6 +74,7 @@ class ProactiveLogic:
 
         self.model = model
         print(f"🔄 LLM overridden by experiment settings: {self.provider.upper()} / {self.model}")
+        self._log_api_key_status()
 
     def _call_llm(
         self,
@@ -125,62 +142,34 @@ class ProactiveLogic:
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"].strip()
 
-    # def analyze_headline(self, headline: str) -> Dict[str, any]:
-        # """
-        # Analyze a news headline and decide if it's suitable for proactive conversation
-        
-        # Args:
-        #     headline: News headline to analyze
-            
-        # Returns:
-        #     Dictionary with {"should_send": bool, "message": str}
-        # """
-        # try:
-        #     # Real OpenAI API call
-        #     system_prompt = """You are a social interaction assistant. Evaluate if this news headline can be used to start a friendly conversation in Hebrew.
+    def call_with_prompt(
+        self,
+        system: str,
+        user_content: str,
+        json_mode: bool = False,
+        temperature: float = 0.4,
+        max_tokens: int = 400,
+    ) -> str:
+        """
+        Generic LLM dispatch used by all heuristic classes (Task 3.2).
 
-        #     Rules:
-        #     - If the headline is suitable for a friendly conversation, return a short, proactive message in Hebrew (max 15 words)
-        #     - If not suitable, return NONE
-        #     - Focus on topics that are positive, interesting, or relatable to Israelis
-        #     - Avoid controversial, sad, or overly technical topics
-        #     - Messages must be in Hebrew language
+        Heuristic classes pass their memory_prompt or message_prompt as `system`,
+        and the relevant context (messages, event info, etc.) as `user_content`.
+        All calls still route through _call_llm() — single dispatch point.
 
-        #     Respond in this exact JSON format:
-        #     {"should_send": true/false, "message": "your message here"}
+        Raises on LLM failure so callers can provide their own fallback.
+        """
+        msgs = [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user_content},
+        ]
+        return self._call_llm(
+            msgs,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=json_mode,
+        )
 
-        #     Examples:
-        #     Input: "Local Community Garden Wins National Award"
-        #     Output: {"should_send": true, "message": "שמעת על הפרס שהגן הקהילתי קיבל?"}
-
-        #     Input: "Stock Market Declines Sharply"
-        #     Output: {"should_send": false, "message": "NONE"}
-
-        #     Input: "New Coffee Shop Opens Downtown"
-        #     Output: {"should_send": true, "message": "ראית את בית הקפה החדש שנפתח?"}"""
-
-        #                 msgs = [
-        #                     {"role": "system", "content": system_prompt},
-        #                     {"role": "user",   "content": f"Analyze this headline: '{headline}'"},
-        #                 ]
-        #                 response_text = self._call_llm(msgs, temperature=0.3, max_tokens=100, json_mode=True)
-        #                 try:
-        #                     analysis = json.loads(response_text)
-        #                     if "should_send" in analysis and "message" in analysis:
-        #                         return analysis
-        #                     print(f"⚠️ Invalid response format: {analysis}")
-        #                     return {"should_send": False, "message": "NONE"}
-        #                 except json.JSONDecodeError:
-        #                     print(f"⚠️ Could not parse JSON response: {response_text}")
-        #                     return {"should_send": False, "message": "NONE"}
-
-        #             except requests.exceptions.RequestException as e:
-        #                 print(f"❌ Network error calling LLM: {e}")
-        #                 return {"should_send": False, "message": "NONE"}
-        #             except Exception as e:
-        #                 print(f"❌ Error analyzing headline: {e}")
-        #                 return {"should_send": False, "message": "NONE"}
-                
     def extract_user_memory(
         self,
         user_messages: List[str],

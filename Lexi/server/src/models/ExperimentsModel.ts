@@ -42,6 +42,19 @@ export const experimentsSchema = new Schema<IExperiment>(
                     affective:      { type: Boolean, default: true },
                     behaviouralGap: { type: Boolean, default: true },
                 },
+                heuristicWeights: {
+                    affective:      { type: Number, default: 0 },
+                    temporal:       { type: Number, default: 0 },
+                    behaviouralGap: { type: Number, default: 0 },
+                    generic:        { type: Number, default: 0 },
+                    reactive:       { type: Number, default: 100 },
+                },
+                heuristicPrompts: {
+                    affective:      { memoryPrompt: { type: String, default: '' }, messagePrompt: { type: String, default: '' } },
+                    temporal:       { memoryPrompt: { type: String, default: '' }, messagePrompt: { type: String, default: '' } },
+                    behaviouralGap: { memoryPrompt: { type: String, default: '' }, messagePrompt: { type: String, default: '' } },
+                    generic:        { memoryPrompt: { type: String, default: '' }, messagePrompt: { type: String, default: '' } },
+                },
                 llmModel: { type: String, default: 'gpt-4o' },
             }
         },

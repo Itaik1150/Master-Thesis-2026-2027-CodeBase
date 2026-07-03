@@ -1094,10 +1094,177 @@ class ResearchService:
 
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _load_experiment_settings(self, user: dict) -> tuple:
+        """
+        Read heuristicWeights, heuristicPrompts, and llmModel from the experiment doc.
+
+        Returns:
+          heuristic_weights  — {"affective": int, "temporal": int, ...} (sum = 100)
+          heuristic_prompts  — {"affective": {"memoryPrompt": str, "messagePrompt": str}, ...}
+          llm_model          — str | None
+
+        Falls back gracefully: reactive=100 (no notifications) if the experiment doc
+        is missing or cannot be read; converts old boolean heuristics flags to equal
+        weights for backward compatibility.
+        """
+        _DEFAULT_WEIGHTS = {
+            "affective": 0, "temporal": 0, "behaviouralGap": 0,
+            "generic": 0, "reactive": 100,
+        }
+        heuristic_weights: dict = dict(_DEFAULT_WEIGHTS)
+        heuristic_prompts: dict = {}
+        experiment_llm_model    = None
+
+        try:
+            experiment_id = user.get("experimentId")
+            if experiment_id and mongodb_client.connect():
+                exp_doc = mongodb_client.db["experiments"].find_one(
+                    {"_id": ObjectId(str(experiment_id))},
+                    {"experimentFeatures.proactiveSettings": 1},
+                )
+                if exp_doc:
+                    ps = (exp_doc.get("experimentFeatures") or {}).get("proactiveSettings") or {}
+                    if ps.get("heuristicWeights"):
+                        heuristic_weights.update(ps["heuristicWeights"])
+                    elif ps.get("heuristics"):
+                        # Backward compat: convert boolean flags to equal-weight distribution
+                        old_flags  = ps["heuristics"]
+                        active_old = [k for k, v in old_flags.items() if v]
+                        if active_old:
+                            w         = 100 // len(active_old)
+                            remainder = 100 - w * len(active_old)
+                            heuristic_weights = {k: 0 for k in _DEFAULT_WEIGHTS}
+                            for i, k in enumerate(active_old):
+                                heuristic_weights[k] = w + (remainder if i == 0 else 0)
+                            heuristic_weights["reactive"] = 0
+                    if ps.get("heuristicPrompts"):
+                        heuristic_prompts = ps["heuristicPrompts"]
+                    if ps.get("llmModel"):
+                        experiment_llm_model = ps["llmModel"]
+        except Exception as e:
+            print(f"⚠️  Could not load experiment settings for "
+                  f"{user.get('username', 'Unknown')}: {e}")
+        finally:
+            try:
+                mongodb_client.disconnect()
+            except Exception:
+                pass
+
+        return heuristic_weights, heuristic_prompts, experiment_llm_model
+
+    def _select_heuristic(self, weights: dict) -> str:
+        """
+        Randomly select one heuristic name according to probability weights.
+        weights: e.g. {"affective": 50, "temporal": 30, "generic": 20, "reactive": 0}
+        Returns "reactive" if all weights are 0 or the dict is empty.
+        """
+        active = {k: v for k, v in weights.items() if isinstance(v, (int, float)) and v > 0}
+        if not active:
+            return "reactive"
+        total = sum(active.values())
+        rand = random.uniform(0, total)
+        cumulative = 0.0
+        for name, weight in active.items():
+            cumulative += weight
+            if rand <= cumulative:
+                return name
+        return list(active.keys())[-1]
+
+    def _reload_proactive_memory(self, user: dict, user_id: str, username: str, memory: dict):
+        """
+        Reload proactiveMemory from MongoDB after a heuristic scan writes new data.
+        Mutates memory in-place and returns updated (user, memory).
+        """
+        try:
+            if mongodb_client.connect():
+                fresh_doc = mongodb_client.db[mongodb_client.users_collection].find_one(
+                    {"_id": ObjectId(user_id)},
+                    {"proactiveMemory": 1},
+                )
+                if fresh_doc:
+                    fresh_pm = fresh_doc.get("proactiveMemory") or {}
+                    user = {**user, "proactiveMemory": fresh_pm}
+                    memory.update(fresh_pm)
+        except Exception as e:
+            print(f"⚠️  Could not reload proactiveMemory for {username}: {e}")
+        finally:
+            mongodb_client.disconnect()
+        return user, memory
+
+    def _run_selected_heuristic(
+        self,
+        selected: str,
+        user: dict,
+        heuristic_prompts: dict,
+    ) -> tuple:
+        """
+        Instantiate the selected heuristic class, call get_proactive_message(),
+        and return (message_dict, heuristic_instance).
+
+        The heuristic instance is returned so the caller can invoke
+        heuristic.clear_after_send() after a successful FCM send.
+
+        Returns (None, None) when:
+          - The heuristic class is unknown
+          - get_proactive_message() returns None (nothing to send this cycle)
+          - An unhandled exception is raised inside the heuristic
+        """
+        from heuristics.affective import AffectiveHeuristic
+        from heuristics.temporal import TemporalHeuristic
+        from heuristics.behavioural_gap import BehaviouralGapHeuristic
+        from heuristics.generic import GenericHeuristic
+
+        cls_map = {
+            "affective":      AffectiveHeuristic,
+            "temporal":       TemporalHeuristic,
+            "behaviouralGap": BehaviouralGapHeuristic,
+            "generic":        GenericHeuristic,
+        }
+
+        cls = cls_map.get(selected)
+        if not cls:
+            print(f"⚠️  _run_selected_heuristic: unknown heuristic '{selected}'")
+            return None, None
+
+        h = cls(
+            user=user,
+            llm_service=self.llm_service,
+            mongodb_client=mongodb_client,
+            prompts_from_db=heuristic_prompts.get(selected, {}),
+        )
+
+        try:
+            text = h.get_proactive_message()
+        except Exception as e:
+            print(f"❌ [{h.username}] {selected} heuristic raised an exception: {e}")
+            traceback.print_exc()
+            return None, None
+
+        if not text:
+            return None, None
+
+        return {
+            "trigger_source":    selected,
+            "source":            selected,
+            "topic_label":       selected,
+            "generated_message": text,
+            "personalized":      True,
+        }, h
+
     def coordinated_send_and_inject(self, candidates: List[Dict], users: List[Dict], cycle_id: str) -> Dict:
         """
-        For each eligible user, pick the best candidate from the pool,
-        send FCM, and inject the message as firstChatSentence.
+        Per-user orchestration loop (Task 3.2 clean architecture):
+
+        For each eligible user:
+          1. _load_experiment_settings()  → heuristic weights + prompts + LLM model
+          2. Read name/language from existing proactiveMemory  (0 LLM calls)
+          3. _select_heuristic(weights)   → one heuristic name
+          4. _run_selected_heuristic()    → instantiate class, call get_proactive_message()
+          5. inject_prompt + _create_conversation + FCM send
+          6. heuristic.clear_after_send() + log
+
+        `candidates` is kept for signature compatibility but is no longer used.
+        It will be removed in Task 5.1 along with build_candidate_pool().
         """
         results = {
             "fcm_sent": 0,
@@ -1115,170 +1282,40 @@ class ResearchService:
             fcm_token = user["fcmToken"]
             proactive_group = user.get('proactiveGroup', 'generic')  # Default to generic for existing users
 
-            # ── Load experiment heuristic settings for this user ──────────────
-            # Defaults: all heuristics ON, model = env-configured LLM
-            heuristic_flags = {"temporal": True, "affective": True, "behaviouralGap": True}
-            experiment_llm_model = None  # None → fall back to env LLM_MODEL
-            try:
-                experiment_id = user.get("experimentId")
-                if experiment_id and mongodb_client.connect():
-                    exp_doc = mongodb_client.db["experiments"].find_one(
-                        {"_id": ObjectId(str(experiment_id))},
-                        {"experimentFeatures.proactiveSettings": 1},
-                    )
-                    if exp_doc:
-                        ps = (exp_doc.get("experimentFeatures") or {}).get("proactiveSettings") or {}
-                        if ps.get("heuristics"):
-                            heuristic_flags.update(ps["heuristics"])
-                        if ps.get("llmModel"):
-                            experiment_llm_model = ps["llmModel"]
-            except Exception as e:
-                print(f"⚠️  Could not load experiment settings for {username}: {e}")
-            finally:
-                try:
-                    mongodb_client.disconnect()
-                except Exception:
-                    pass
+            # ── Load experiment settings ───────────────────────────────────────
+            heuristic_weights, heuristic_prompts, experiment_llm_model = \
+                self._load_experiment_settings(user)
+            active_weights = {k: v for k, v in heuristic_weights.items() if v > 0}
+            print(f"⚖️  [{username}] Active heuristic weights: {active_weights}")
 
             if experiment_llm_model:
                 self.llm_service.override_model(experiment_llm_model)
 
-            # Build memory:
-            #   3.4a — demographics + recent sent topics (no LLM)
-            #   3.4b — interests / future_mentions / insight / language (one LLM call)
-            #   3.4c — persist merged memory to the user document
-            # All MongoDB work happens inside one connect/disconnect block.
-            memory = {}
-            try:
-                if mongodb_client.connect():
-                    basic     = self.build_basic_memory(user)
-                    extracted = self.extract_conversation_memory(user_id)
-                    memory    = {**basic, **extracted}
+            # Read name/language from existing proactiveMemory — no LLM, no MongoDB call.
+            # Each heuristic's create_memory() updates these for future cycles.
+            existing_pm = user.get("proactiveMemory") or {}
+            name     = (existing_pm.get("demographics") or {}).get("name") or username
+            language = existing_pm.get("preferred_language", "he")
 
-                    # ── Guard: preserve existing rich fields when LLM extraction
-                    # fails (e.g. timeout) so we don't overwrite good data with
-                    # empty lists. Also carry forward heuristic-managed fields
-                    # (fired_temporal_mentions, pending_affective_followup,
-                    # last_analyzed_conversation_id) which are written by the
-                    # heuristic modules themselves and must survive memory saves.
-                    existing_pm = user.get("proactiveMemory") or {}
-                    for field in ("future_mentions", "interests", "conversation_insight", "emotional_memories"):
-                        if not memory.get(field) and existing_pm.get(field):
-                            memory[field] = existing_pm[field]
-                    
-                    # Special handling for emotional_memories: merge new with existing unused ones
-                    if memory.get("emotional_memories") and existing_pm.get("emotional_memories"):
-                        existing_unused = [mem for mem in existing_pm["emotional_memories"] if not mem.get("used", False)]
-                        new_memories = memory["emotional_memories"]
-                        # Combine and deduplicate by content
-                        seen_content = set()
-                        merged_memories = []
-                        for mem_list in [existing_unused, new_memories]:
-                            for mem in mem_list:
-                                content = mem.get("content", "").strip()
-                                if content and content not in seen_content:
-                                    merged_memories.append(mem)
-                                    seen_content.add(content)
-                        memory["emotional_memories"] = merged_memories
-                    for field in (
-                        "fired_temporal_mentions",
-                        "pending_affective_followup",
-                        "last_affective_analyzed_msg_count",
-                        "open_intents",
-                        "pending_gap_followup",
-                        "last_intent_scan_conversation_id",
-                    ):
-                        if existing_pm.get(field):
-                            memory[field] = existing_pm[field]
+            # ── Probability-based heuristic selection ─────────────────────────
+            selected = self._select_heuristic(heuristic_weights)
+            print(f"\n🎲 [{username}] Selected heuristic: {selected}")
 
-                    self.save_user_memory(user_id, memory)
-                    print(
-                        f"🧠 [{username}] interests={len(memory.get('interests') or [])} "
-                        f"future_mentions={len(memory.get('future_mentions') or [])} "
-                        f"lang={memory.get('preferred_language', 'en')}"
-                    )
-            except Exception as e:
-                print(f"⚠️  Could not build memory for {username}: {e}")
-            finally:
-                mongodb_client.disconnect()
+            if selected == "reactive":
+                print(f"🚫 [{username}] Reactive — skipping")
+                continue
 
-            # ── Phase 4.3–4.5: Heuristics — priority: affective → gap → temporal → topic
-            #
-            # Step 1 (side-effects): run scans that may schedule future nudges.
-            # These only write to MongoDB and never fire a message on their own.
-            # Each scan is gated by the per-experiment heuristic flags.
-            if heuristic_flags.get("affective", True):
-                affective.analyze_and_schedule(user, mongodb_client, self.llm_service)
-            if heuristic_flags.get("behaviouralGap", True):
-                behavioural_gap.scan_for_gaps(user, mongodb_client, self.llm_service)
-
-            # Step 2: reload proactiveMemory from MongoDB before evaluate().
-            # The user dict was loaded at the START of the cycle, before save_user_memory
-            # and the heuristic scans wrote new data.  Without a reload, evaluate()
-            # would read stale state — e.g. future_mentions saved this cycle would be
-            # invisible to temporal.evaluate(), and pending followups written by the
-            # scans would be missed entirely.
-            # ALSO: Update the in-memory `memory` dict so generate_affective_default()
-            # sees fresh emotional_memories from the heuristic scans.
-            try:
-                if mongodb_client.connect():
-                    fresh_doc = mongodb_client.db[mongodb_client.users_collection].find_one(
-                        {"_id": ObjectId(user_id)},
-                        {"proactiveMemory": 1},
-                    )
-                    if fresh_doc:
-                        fresh_pm = fresh_doc.get("proactiveMemory") or {}
-                        user = {**user, "proactiveMemory": fresh_pm}
-                        # Also update the in-memory memory dict to prevent stale data
-                        # from being used by generate_affective_default()
-                        memory.update(fresh_pm)
-            except Exception as e:
-                print(f"⚠️  Could not reload proactiveMemory for {username}: {e}")
-            finally:
-                mongodb_client.disconnect()
-
-            # Step 3: check if any heuristic should fire RIGHT NOW.
-            # Evaluate all three before branching so we can log clearly.
-            # Each evaluate is gated by the per-experiment heuristic flags.
-            affective_nudge = affective.evaluate(user)      if heuristic_flags.get("affective", True)      else None
-            gap_nudge       = behavioural_gap.evaluate(user) if heuristic_flags.get("behaviouralGap", True) else None
-            temporal_nudge  = temporal.evaluate(user)       if heuristic_flags.get("temporal", True)       else None
-
-            memory_pm = user.get("proactiveMemory") or {}
-            print(
-                f"\n🔎 [{username}] affective={'🔥' if affective_nudge else '—'} "
-                f"gap={'🔥' if gap_nudge else '—'} "
-                f"temporal={'🔥' if temporal_nudge else '—'} "
-                f"| future_mentions={len(memory_pm.get('future_mentions') or [])} "
-                f"open_intents={len(memory_pm.get('open_intents') or [])}"
-            )
-
-            # ── Resolve final message via single dispatch point ───────────────
-            name = (memory.get("demographics") or {}).get("name") or username
-            language = memory.get("preferred_language", "he")
-
-            message = self._resolve_message(
-                proactive_group=proactive_group,
-                affective_nudge=affective_nudge,
-                gap_nudge=gap_nudge,
-                temporal_nudge=temporal_nudge,
-                candidates=candidates,
-                memory=memory,
-                name=name,
-                language=language,
-                user_id=user_id,
+            message, heuristic = self._run_selected_heuristic(
+                selected=selected,
+                user=user,
+                heuristic_prompts=heuristic_prompts,
             )
 
             if not message:
-                print(f"⏭️  [{username}] skipped (reactive group or no candidate)")
+                print(f"⏭️  [{username}] {selected} heuristic returned no message — skipping")
                 continue
 
-            tag = "✨personalized" if message.get("personalized") else "default"
-            focus = message.get("focus")
-            focus_str = f" focus={focus}" if focus else ""
-            print(f"\n👤 {username} [group:{proactive_group}] → [{message['source']}:{message['topic_label']}] ({tag}{focus_str}) {message['generated_message']}")
-            if message.get("personalized"):
-                print(f"   ↪ original was: {message.get('original_message', '')}")
+            print(f"\n👤 {username} [group:{proactive_group}] → [{selected}] {message['generated_message']}")
 
             try:
                 from core.models import UserContext
@@ -1329,17 +1366,8 @@ class ResearchService:
                     print(f"✅ FCM sent to {username}")
 
                     # Step 4: heuristic post-send cleanup
-                    if affective_nudge:
-                        affective.clear_followup(user_id, mongodb_client)
-                    elif gap_nudge:
-                        behavioural_gap.clear_followup(user_id, mongodb_client)
-                    elif temporal_nudge:
-                        temporal.mark_fired(
-                            user_id,
-                            temporal_nudge.mention_text,
-                            temporal_nudge.when_iso,
-                            mongodb_client,
-                        )
+                    if heuristic:
+                        heuristic.clear_after_send()
 
                     # Step 5: Log success
                     self.log_proactive_event(cycle_id, user_id, message, "sent", notification_result, proactive_group)
@@ -1531,47 +1559,60 @@ class ResearchService:
 
     def run_full_proactive_cycle(self) -> Dict:
         """
-        Main orchestrator. Called by run_cycle.py (Render cron) and scheduler.py.
+        Main orchestrator. Called by run_cycle.py and scheduler.py.
 
         Step 0 — expire any injected firstChatSentence overrides whose window has passed.
-        Step 1 — build a topic-based candidate pool (used as fallback when no heuristic fires).
-        Step 2 — get eligible users (rate-limited).
-        Step 3 — for each user: build memory, run heuristic scans, evaluate heuristics,
-                  resolve message via _resolve_message, inject + send FCM.
+        Step 1 — get eligible users (rate-limited).
+        Step 2 — for each user: build memory, randomly select one heuristic by probability
+                  weight (read from experiment doc), run only that heuristic, inject + send FCM.
         """
-        cycle_id = str(uuid.uuid4())
+        cycle_id   = str(uuid.uuid4())
         start_time = datetime.now()
 
-        print(f"\n=== 🚀 Starting Proactive Cycle {cycle_id[:8]}... ===")
+        # ── Cycle-start banner (visible in Render logs) ────────────────────────
+        print("\n" + "=" * 60)
+        print(f"🚀  PROACTIVE CYCLE START")
+        print(f"    Cycle ID  : {cycle_id[:8]}")
+        print(f"    Timestamp : {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"    LLM engine: {self.llm_service.provider.upper()} / {self.llm_service.model}")
+        print(f"    Config    : heuristic weights + prompts read live per user from MongoDB")
+        print("=" * 60)
 
         try:
             # Step 0: Restore expired firstChatSentence overrides
             self.expire_injected_prompts()
 
-            # Step 1: Build topic-based fallback candidate pool
-            candidates = self.build_candidate_pool()
-
-            # Step 2: Get eligible users (rate-limit checked)
+            # Step 1: Get eligible users (rate-limit checked)
             eligible_users = self.get_proactive_users_with_rate_limit(cycle_id)
 
             if not eligible_users:
-                print("❌ No eligible users found")
+                print("❌ No eligible users found — cycle complete (nothing to send)")
+                print("=" * 60 + "\n")
                 return {"success": False, "message": "No eligible users found"}
 
-            # Step 3: Per-user heuristic evaluation, message resolution, send
-            results = self.coordinated_send_and_inject(candidates, eligible_users, cycle_id)
+            print(f"\n👥  Eligible users this cycle: {len(eligible_users)}")
+            print(f"    Per-user heuristic selection logged inline below.\n")
+
+            # Step 2: Per-user probability-based heuristic selection and send
+            results = self.coordinated_send_and_inject([], eligible_users, cycle_id)
 
             duration = (datetime.now() - start_time).total_seconds()
-            print(f"\n✅ Proactive Cycle Complete!")
-            print(f"📊 Results: {results['fcm_sent']} FCM sent, {results['injected']} injected")
-            print(f"⏱️  Duration: {duration:.2f}s")
+
+            # ── Cycle-end banner ───────────────────────────────────────────────
+            print("\n" + "=" * 60)
+            print(f"✅  PROACTIVE CYCLE COMPLETE  [{cycle_id[:8]}]")
+            print(f"    FCM sent         : {results['fcm_sent']}")
+            print(f"    FCM failed       : {results['fcm_failed']}")
+            print(f"    Injected         : {results['injected']}")
+            print(f"    Injection failed : {results['injection_failed']}")
+            print(f"    Duration         : {duration:.2f}s")
+            print("=" * 60 + "\n")
 
             return {
                 "success": True,
                 "cycle_id": cycle_id,
                 "results": results,
                 "duration": duration,
-                "candidates_built": len(candidates),
             }
 
         except Exception as e:

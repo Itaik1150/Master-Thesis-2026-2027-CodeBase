@@ -1,144 +1,337 @@
-# Lexi - Final Execution Plan & Working Document
+# Lexi — Final Execution Plan & Working Document
 
-## Phase 1: Core System Tuning & Logic (Run on `main` branch)
+> Status legend: ✅ Done | 🔄 In Progress | ⬜ Pending
 
+---
 
-**Task 1: A/B Testing Group Assignment**
-    * **Goal:** Dynamically assign new users to one of 3 groups (Affective Proactive, Generic Proactive, Reactive). The system must log this assignment and read it to determine notification behavior. Replace old generic topics with the new Generic Proactive group.
-    * *Group 1 (Affective Proactive):* Emotional, personal notifications (acts like a listening ear/journaling prompt to increase emotional sharing).
-    * *Group 2 (Generic Proactive):* Random, generic notifications inviting the user to chat. (Note: Replace the old generic topic triggers with this group).
-    * *Group 3 (Reactive):* No proactive notifications at all.
+## Phase 1: Core System Tuning & Logic (`main` branch)
 
-   **Upgrade Affective Proactive (Group 1) Logic (Crucial):**
-     * **Memory Extraction Update:** Modify the memory extraction logic (which analyzes recent conversations) to explicitly detect and flag emotional expressions or sensitive topics with a `sensitivity_score` (e.g., 1-10).
-     * **Cold Start (No/Low Data):** When no high-sensitivity memories exist, the LLM must generate a gentle, emotionally inviting prompt that includes the user's name (e.g., "Hi [Name], just checking in. I'm here if you need a listening ear today.").
-     * **Context-Rich (With Data):** Once sensitive memories are accumulated, the LLM must use the highest `sensitivity_score` topics to craft a highly personalized, relevant, and empathetic emotional check-in, rather than a generic prompt.
-  3. Replace the old generic topics with the new Generic Proactive group (Group 2), and ensure the Reactive group (Group 3) receives zero notifications.
-* **Relevant Files:**
-  * **Server — group assignment & user model:**
-    * `Lexi/server/src/services/experiments.service.ts` — `getActiveAgent()`: the existing random A/B agent-assignment logic to extend to 3 groups
-    * `Lexi/server/src/services/users.service.ts` — assigns agent to user at registration
-    * `Lexi/server/src/controllers/usersController.controller.ts` — registration endpoint that triggers agent assignment
-    * `Lexi/server/src/models/UsersModel.ts` — user schema (stores assigned agent / group)
-    * `Lexi/server/src/models/ExperimentsModel.ts` — experiment schema (A/B agents, proactive settings)
-    * `Lexi/server/src/types/experiments.type.ts` — `ABAgents`, `agentsMode`, `abAgents` types
-    * `Lexi/server/src/types/common.type.ts` — `AgentsMode` enum (`Single` / `A/B`)
-  * **Python — reads group, gates & personalizes notifications:**
-    * `logic-python/services/research_service.py` — main orchestrator: reads user's assigned agent/group, skips Reactive users, branches logic for Affective vs Generic
-    * `logic-python/services/llm_service.py` — `extract_user_memory()` (add `sensitivity_score`), `personalize_message_for_user()` (cold-start vs context-rich branching)
-    * `logic-python/core/models.py` — Python data models (extend to hold `sensitivity_score`)
-    * `logic-python/scheduler.py` — entry point for scheduled cycle
-  * **Admin UI — configure the 3 agents:**
-    * `Lexi/client/src/screens/Admin/components/agents-panel/active-agents/AbAgents.tsx` — A/B agent distribution config UI
-    * `Lexi/client/src/screens/Admin/components/agents-panel/agent-form/AgentForm.tsx` — create/edit each agent (group 1, 2, 3)
-    * `Lexi/client/src/screens/Admin/components/experiments-panel/ExperimentForm.tsx` — experiment-level agent mode selection
+---
 
-**Task 2: System Prompt Sanitization & Strict Emotional Framing**
-* **Goal:** 1. **Audit & Sanitize:** Locate the exact system prompts sent to the LLM. Strictly remove any instructions or context that mention this is an "experiment", a "research study", or a "thesis". The LLM must act completely natural.
-  2. **Strict Emotional Focus (Group 1 - Affective):** * Explicitly define the persona in the prompt: "You are an empathetic agent that encourages emotional sharing." 
-     * **Crucial Rule:** Proactive notifications must NO LONGER be based on general user insights (e.g., hobbies, work). They must be generated STRICTLY based on emotional memories and the `sensitivity_score`.
-     * Instruct the LLM: "Analyze the user's emotional memories to find the personal emotional focus that needs to be raised in the next conversation." 
-     * Cold Start: If no emotional memory exists, fall back to a warm, gentle invitation purely focused on emotional sharing (e.g., "Hi [Name], how are you feeling today?").
-  3. **Group 2 Prompt (Generic):** Instruct the LLM to act as a standard assistant generating a completely generic, standard invitation to chat, with zero emotional weight and no specific topics.
-* **Relevant Files:**
-  * `logic-python/services/llm_service.py` — Primary target. Contains the strings sent to the LLM for proactive generation.
-  * `logic-python/services/research_service.py` — Calls `llm_service` and passes framing context.
-  * `Lexi/server/src/models/AgentsModel.ts` — In-chat persona prompt fields (if in-chat behavior needs to match).
-  * `Lexi/server/src/services/conversations.service.ts` — Assembles the in-chat system prompt.
+### ✅ Task 1: A/B Group Assignment
 
-**Task 4: Dashboard Wiring**
-* **Goal:** Connect React UI to backend logic. Add toggles for heuristics, input fields for allowed notification hours - Restrict firing days to Monday–Thursday only. Set timezone to CET (Central European Time), and ensure the UI LLM selector overrides codebase defaults. 
-* **Relevant Files:**
-  * **React UI (proactive settings modal):**
-    * `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx` — heuristic toggles, LLM model selector, notification-hours input; primary UI file to extend
-    * `Lexi/client/src/DAL/server-requests/experiments.ts` — client API calls to persist proactive settings
-    * `Lexi/client/src/models/AppModels.ts` — client-side experiment type (add new fields)
-  * **Server — schema & API:**
-    * `Lexi/server/src/models/ExperimentsModel.ts` — `experimentFeatures.proactiveSettings` schema; add `allowedHours`, `allowedDays` fields
-    * `Lexi/server/src/types/experiments.type.ts` — TypeScript types for the new fields
-    * `Lexi/server/src/controllers/experimentsController.controller.ts` — experiment CRUD endpoints
-    * `Lexi/server/src/services/experiments.service.ts` — experiment business logic
-  * **Python — reads settings at runtime:**
-    * `logic-python/scheduler.py` — `FIRE_TIMES` list and timezone (`Jerusalem` → change to `CET`); restrict to Mon–Thu here
-    * `logic-python/services/research_service.py` — reads `proactiveSettings` from experiment doc to respect `allowedHours`, `allowedDays`, and `llmModel` override
+**Goal:** Assign every new user to one of three proactive groups at registration. The assignment is stored on the user document and read every cycle to gate notification behavior.
 
-**Task 5: Data Logging & Questionnaires**
-* **Goal:** Ensure comprehensive tracking of all interactions for thesis analysis. Verify the app correctly serves the selected pre/post-experiment questionnaires.
-* **Relevant Files:**
-  * **Data logging — server:**
-    * `Lexi/server/src/models/ConversationsModel.ts` — message storage schema
-    * `Lexi/server/src/models/MetadataConversationsModel.ts` — conversation metadata (`userId`, `isFinished`, timestamps)
-    * `Lexi/server/src/services/dataAggregation.service.ts` — data export / aggregation logic
-    * `Lexi/server/src/controllers/dataAggregationController.controller.ts` — `/dataAggregation` API endpoints
-    * `Lexi/server/src/routers/dataAggregationRouter.router.ts` — route registration
-  * **Data logging — Python (proactive audit trail):**
-    * `logic-python/services/research_service.py` — writes to `proactive_logs` collection (trigger source, message, status, group)
-    * `logic-python/utils/mongodb_client.py` — Python MongoDB connection
-  * **Data logging — client:**
-    * `Lexi/client/src/screens/Admin/components/data-panel/DataPanel.tsx` — admin data download UI
-    * `Lexi/client/src/DAL/server-requests/dataAggregation.ts` — client API for data export
-    * `Lexi/client/src/screens/Chat/components/UserAnnotation.tsx` — user message annotations logged during chat
-  * **Questionnaires — server:**
-    * `Lexi/server/src/models/FormsModel.ts` — form/questionnaire MongoDB model
-    * `Lexi/server/src/services/forms.service.ts` — form business logic
-    * `Lexi/server/src/controllers/formsController.ts` — form API endpoints
-    * `Lexi/server/src/routers/formsRouter.ts` — form routes
-    * `Lexi/server/src/types/forms.type.ts` — form/question type definitions
-  * **Questionnaires — client:**
-    * `Lexi/client/src/screens/Chat/ChatPage.tsx` — triggers pre/post-conversation form flow
-    * `Lexi/client/src/components/forms/conversation-form/ConversationForm.tsx` — pre/post-conversation questionnaire wrapper
-    * `Lexi/client/src/screens/Chat/components/side-bar-chat/SideBarChat.tsx` — chat sidebar that manages form state
-    * `Lexi/client/src/screens/Admin/components/forms-panel/FormsPanel.tsx` — admin questionnaire builder
-    * `Lexi/client/src/screens/Admin/components/forms-panel/create-form/CreateForm.tsx` — create/edit form
-    * `Lexi/client/src/components/questions/Question.tsx` — question renderer (dispatches to type-specific components)
-    * `Lexi/client/src/components/questions/ScaleRadio.tsx` — Likert/scale question
-    * `Lexi/client/src/components/questions/RadioSelection.tsx` — radio question
-    * `Lexi/client/src/components/questions/BinaryRadioSelector.tsx` — yes/no question
-    * `Lexi/client/src/components/questions/NumberInput.tsx` — numeric input question
-    * `Lexi/client/src/components/questions/SelectionTextInput.tsx` — selection + text question
-    * `Lexi/client/src/DAL/server-requests/forms.ts` — client form API calls
+- **Group 1 — Affective Proactive:** Emotional, personalized notifications. Acts as a listening ear / journaling prompt to encourage emotional sharing.
+- **Group 2 — Generic Proactive:** Random, generic invitations to chat. No emotional framing.
+- **Group 3 — Reactive:** No proactive notifications at all.
 
+**Relevant files:**
+- `Lexi/server/src/services/experiments.service.ts` — `getActiveAgent()`: extend A/B logic to 3 groups
+- `Lexi/server/src/services/users.service.ts` — assigns group at registration
+- `Lexi/server/src/models/UsersModel.ts` — stores `proactiveGroup` field
+- `Lexi/server/src/models/ExperimentsModel.ts` — experiment schema
+- `logic-python/services/research_service.py` — reads `proactiveGroup`, routes to correct logic
 
-Phase 2: EIF CogAI 2026 Oxford Demo (Branch: oxford-demo)
-Specifically designed for the EIF CogAI 2026 conference presentation on June 25-26.
+---
 
-Note: This phase will be executed on a separate Git branch to avoid polluting the main thesis logic.
+### ✅ Task 2: System Prompt Sanitization & Strict Emotional Framing
 
-Step 2.1: Environment Setup & Abstraction
-Action: Create a new branch git checkout -b oxford-demo.
+**Goal:** Audit every string sent to the LLM. Remove all mentions of "experiment", "research", or "thesis". Enforce group-specific personas.
 
-Goal: Isolation. In this branch, we will disable the original scheduler.py and research_service.py logic, replacing them with a simplified "Demo Runner" that executes only the 3 predefined notifications.
+- **Affective group:** Persona = *"You are an empathetic agent that encourages emotional sharing."* Notifications must be generated strictly from emotional memories, not hobbies or general interests.
+- **Generic group:** Persona = standard assistant, zero emotional weight, no specific topics.
+- **Cold start (Affective):** If no emotional memory exists, generate a warm, generic emotional invitation (e.g., *"Hi [Name], how are you feeling today?"*).
 
-Result: The system becomes deterministic and optimized for live demonstration.
+**Relevant files:**
+- `logic-python/services/llm_service.py` — all LLM prompt strings
+- `logic-python/services/research_service.py` — passes framing context to LLM service
+- `Lexi/server/src/services/conversations.service.ts` — in-chat system prompt assembly
 
-Step 2.2: Hardcoding Notifications & Logic
-Action: Create a simple run_demo_cycle() function in research_service.py.
+---
 
-Goal: Predefine the 3 notification sequence (e.g., triggered by timers: 30 seconds, 2 minutes, 5 minutes post-registration).
+### ⬜ Task 3: Heuristic Modularity & Probability-Based Selection
 
-Result: Regardless of user input, the demo follows the specific conference "storyline."
+**This is the biggest architectural change. Read fully before implementing.**
 
-Step 2.3: "Experiment Termination" (The Dead End)
-Action: Add a database flag is_demo_finished.
+#### 3.1 — Probability-Based Heuristic Selection
 
-Goal: Once the 3rd notification is fired, the system sets is_demo_finished: true for the user.
+Replace the current fixed-priority chain (affective → gap → temporal → topic) with a **researcher-controlled probability system**. Each active heuristic gets a probability weight set from the dashboard (weights across all active heuristics must sum to 100%). Each cycle, the system randomly selects one heuristic according to those weights.
 
-Result: The proactive loop effectively "dies" for that user, and the app triggers the final UI state.
+The five heuristics are:
+1. **Affective** — detects emotional content in past conversations
+2. **Temporal** — detects upcoming events the user mentioned
+3. **Behavioural Gap** — detects stated intentions the user hasn't followed up on
+4. **Generic** — sends a neutral, generic invitation to chat (no memory needed)
+5. **Reactive** — sends nothing; effectively the null state
 
-Step 2.4: UI Update (Thank You & Contact Screen)
-Action: Create a static React screen that displays when the app detects is_demo_finished: true.
+**Reactive** is not a heuristic in the active sense — it is the fallback when all heuristics are toggled off, OR it can be assigned a probability weight (e.g., Affective 50%, Reactive 50% = send a notification only half the time).
 
-Goal: Present the contact and project details to conference attendees:
+**How the cycle works after this change:**
+```
+coordinated_send_and_inject():
+  1. Read heuristic weights from experiment doc (MongoDB)
+  2. Filter to active (weight > 0) heuristics
+  3. Randomly select one heuristic according to its probability weight
+  4. Call selected_heuristic.get_proactive_message(user)
+  5. If Reactive selected (or all heuristics off) → skip this user (no notification)
+  6. Otherwise: inject + FCM send (same as current)
+```
 
-Itai Kohn: itaikoh@post.bgu.ac.il | LinkedIn
+**Relevant files:**
+- `logic-python/services/research_service.py` — `coordinated_send_and_inject()`: replace priority chain with probability selector
+- `Lexi/server/src/models/ExperimentsModel.ts` — add `heuristicWeights` field to `proactiveSettings`
+- `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx` — probability sliders (see Task 4.1)
 
-Guy Laban: laban@bgu.ac.il
+---
 
-Lab Website: https://labalab.li/
+#### 3.2 — Heuristic Class Architecture (Modularity)
 
-GitHub Repo: https://github.com/Itaik1150/Master-Thesis-2026-2027-CodeBase
+Each heuristic becomes a **self-contained class** responsible for its own memory extraction and message generation. This follows agent-task specialization: one focused LLM call per task, not one large call that does everything at once.
 
+**Base class (shared by all heuristics):**
+```python
+class BaseHeuristic:
+    memory_prompt: str       # prompt for extracting this heuristic's relevant memories
+    message_prompt: str      # prompt for generating the proactive message
 
-## Phase 3: Repository Cleanup
-* **Goal:** Rename project, update UI screenshots, move `AI Guidelines` to `.gitignore`.
-**GitHub Overhaul:** Rename the project appropriately, add updated UI screenshots, and move `AI Guidelines` and other similar files to `.gitignore`.
+    def __init__(self, user, llm_service, mongodb_client, prompts_from_db):
+        # Load memory_prompt and message_prompt from DB (set by researcher in dashboard)
+        # Fall back to hardcoded defaults if not set
+
+    def create_memory(self) -> None:
+        # Read recent conversations for this user
+        # Call LLM with memory_prompt to extract relevant memories
+        # Write extracted memories to the user's proactiveMemory in MongoDB
+        # Mark analyzed messages so they are not re-processed next cycle
+
+    def get_proactive_message(self) -> str | None:
+        # Call self.create_memory() — always refresh before generating
+        # Read unused memories from proactiveMemory (specific to this heuristic)
+        # If memories exist: call LLM with message_prompt + best memory → personalized message
+        # If no memories (cold start): call LLM with cold-start framing → generic but warm invite
+        #   (LLM-generated, not a static string, so it varies each time)
+        # Return the final message string
+```
+
+**Concrete classes — each overrides only what differs:**
+
+| Class | Memory it extracts | MongoDB field | Message style |
+|---|---|---|---|
+| `AffectiveHeuristic` | Emotional expressions, personal struggles | `emotional_memories` (affective_score 1-10) | Empathetic check-in referencing the specific memory |
+| `TemporalHeuristic` | Future events/plans the user mentioned | `future_mentions` (when_iso) | Timely reminder or excited question about the event |
+| `BehaviouralGapHeuristic` | Stated intentions not followed up | `open_intents` (stated_at) | Gentle follow-up: "Did you end up doing X?" |
+| `GenericHeuristic` | None (no memory needed) | — | Neutral, emotionless chat invitation |
+
+**Important:** All classes use `llm_service.py` (the existing `ProactiveLogic` class and its `_call_llm()`) for every LLM call. No LLM calls live directly in the heuristic files — they pass prompts to the service.
+
+**Relevant files:**
+- `logic-python/heuristics/affective.py` — refactor to class
+- `logic-python/heuristics/temporal.py` — refactor to class
+- `logic-python/heuristics/behavioural_gap.py` — refactor to class
+- `logic-python/heuristics/generic.py` — **create new file**
+- `logic-python/heuristics/base_heuristic.py` — **create new base class file**
+- `logic-python/services/llm_service.py` — `_call_llm()` remains the single LLM dispatch point
+- `logic-python/services/research_service.py` — `coordinated_send_and_inject()` calls `heuristic.get_proactive_message(user)`
+
+---
+
+### ⬜ Task 4: Dashboard Wiring
+
+**Goal:** Give the researcher full control over the proactive system from the admin UI. Every setting must flow from UI → MongoDB → Python code.
+
+---
+
+#### 4.1 — Heuristic On/Off Toggles & Probability Weights
+
+The proactive settings modal must have one row per heuristic (Affective, Temporal, Behavioural Gap, Generic). Each row has:
+- A toggle (on/off)
+- A probability input (0–100) — only editable when toggled on
+- The weights of all active heuristics must sum to 100% (UI enforces this with real-time feedback)
+
+**UI must clearly state:** *"If all heuristics are turned off, the system enters Reactive mode — no notifications will be sent."*
+
+**Data flow:** UI → `experiments.proactiveSettings.heuristicWeights` (MongoDB) → Python reads at cycle start.
+
+**Relevant files:**
+- `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`
+- `Lexi/client/src/DAL/server-requests/experiments.ts`
+- `Lexi/client/src/models/AppModels.ts`
+- `Lexi/server/src/models/ExperimentsModel.ts` — add `heuristicWeights: { affective, temporal, behaviouralGap, generic }` to schema
+- `Lexi/server/src/types/experiments.type.ts`
+
+---
+
+#### 4.2 — Per-Heuristic Prompt Editor
+
+Under each heuristic toggle in the UI, add two editable text fields:
+- **Memory Prompt** — instructs the LLM on what to extract from conversations (maps to `memory_prompt` in the heuristic class)
+- **Message Prompt** — instructs the LLM on what kind of proactive message to generate (maps to `message_prompt`)
+
+Each field is pre-populated with the default prompt for that heuristic. A short description below each field explains what it controls. The researcher can edit to customize the heuristic's behavior without touching code.
+
+**Data flow:** UI → `experiments.proactiveSettings.heuristicPrompts` (MongoDB) → read in `BaseHeuristic.__init__()` before each cycle.
+
+**Relevant files:**
+- `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`
+- `Lexi/server/src/models/ExperimentsModel.ts` — add `heuristicPrompts` object to schema
+- `logic-python/heuristics/base_heuristic.py` — `__init__()` reads prompts from experiment doc
+
+---
+
+#### 4.3 — Scheduling: Days & Hours
+
+Replace the current "interval in minutes" field with a proper schedule UI:
+- **Allowed Days:** Day-range picker (e.g., Mon–Thu). Multiple non-consecutive ranges allowed.
+- **Notification Times:** Choose between:
+  - **Exact times** — researcher specifies 1–3 fixed times (e.g., 13:00, 17:30, 21:00)
+  - **Random window** — researcher sets a time range (e.g., 12:00–14:00) and the system fires once at a random minute within that window each cycle
+
+**Data flow:** UI → `experiments.proactiveSettings.schedule` (MongoDB) → `scheduler.py` reads at startup.
+
+**Relevant files:**
+- `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`
+- `Lexi/server/src/models/ExperimentsModel.ts` — add `schedule: { allowedDays, fireTimes, randomWindows }` to schema
+- `logic-python/scheduler.py` — read `schedule` from DB instead of hardcoded `FIRE_TIMES`
+
+---
+
+#### 4.4 — Scheduler Validation & Cleanup
+
+- Connect `scheduler.py` to MongoDB so `FIRE_TIMES` and allowed days are read from the experiment doc at startup (not hardcoded).
+- Validate `run_cycle.py` works correctly as the Render entry point.
+- **Remove** all references to "Render Cron" from comments and documentation — the scheduling is managed by `scheduler.py` running as a persistent service.
+
+**Relevant files:**
+- `logic-python/scheduler.py`
+- `logic-python/run_cycle.py`
+
+---
+
+#### 4.5 — Verify MongoDB Wiring for Heuristic Config
+
+Confirm that `coordinated_send_and_inject()` correctly reads the live values from MongoDB on every cycle:
+- Heuristic weights (on/off + probability)
+- Heuristic prompts (memory prompt + message prompt)
+- Schedule settings
+
+Write a simple validation log at cycle start: print the active heuristics and their weights so it is visible in Render logs.
+
+**Relevant files:**
+- `logic-python/services/research_service.py`
+- `logic-python/utils/mongodb_client.py`
+
+---
+
+#### 4.6 — LLM Model Selector (including Claude)
+
+The dashboard already has an LLM model selector. Validate end-to-end:
+- API key for the selected provider (OpenAI / Anthropic) is correctly loaded from environment variables.
+- `llm_service.override_model()` is called at cycle start with the model from the experiment doc.
+- Add a clear explanation in the UI **next to the model selector**: *"This controls which AI model generates all proactive notifications for this experiment. Changing this affects message quality, cost, and generation style. Claude models may produce more nuanced emotional messages."*
+
+**Relevant files:**
+- `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx` — add tooltip/description
+- `logic-python/services/llm_service.py` — `override_model()`, `_call_llm()`
+- `logic-python/services/research_service.py` — where `override_model()` is called
+
+---
+
+#### 4.7 — Heuristic Descriptions in the UI
+
+Each heuristic toggle in the dashboard should have a short, plain-language description that mirrors what the code actually does. Suggested text:
+
+- **Affective:** *"Scans the user's recent conversations for emotional content (stress, sadness, joy). When emotional expressions are found, sends a warm, personalized check-in referencing what the user shared."*
+- **Temporal:** *"Detects when the user has mentioned an upcoming event or plan. Sends a timely message asking how they're preparing or how it went."*
+- **Behavioural Gap:** *"Notices when the user stated an intention (e.g., 'I'll go to the gym tomorrow') but hasn't mentioned it since. Sends a gentle follow-up to check in."*
+- **Generic:** *"Sends a simple, friendly invitation to chat — no emotional framing, no specific topic. Used as a control condition or baseline."*
+
+**Relevant files:**
+- `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`
+
+---
+
+### ⬜ Task 5: Bugs & Cleanup
+
+---
+
+#### 5.1 — Remove Candidate Pool Entirely
+
+The topic-based candidate pool (`build_candidate_pool`, `select_message_for_user`, `MAX_CANDIDATES`, `BLOCK_LAST_N_TOPICS`) is no longer needed. Every message now comes from a heuristic class. If no heuristic is active (all off or Reactive selected), no notification is sent.
+
+**Changes:**
+- Delete `build_candidate_pool()` from `research_service.py`
+- Delete `select_message_for_user()` from `research_service.py`
+- Remove `MAX_CANDIDATES`, `BLOCK_LAST_N_TOPICS` constants
+- Remove the `candidates` parameter from `coordinated_send_and_inject()` and `run_full_proactive_cycle()`
+- Remove the topic fallback branch from `_resolve_message()`
+- Delete `generate_topic_message()` from `llm_service.py` (now unused)
+
+**Relevant files:**
+- `logic-python/services/research_service.py`
+- `logic-python/services/llm_service.py`
+
+---
+
+#### 5.2 — Clean Each Heuristic to Its Single Responsibility
+
+Each heuristic's `create_memory()` must extract **only** what it needs and nothing else. Remove all stale fields and the two-step scan-then-fire pattern (which will be gone after Task 3.2).
+
+**Affective (`affective.py`):**
+- `create_memory()` extracts: `emotional_memories` — list of `{ content, affective_score (1-10), timestamp_iso, used: false }`
+- Remove: `pending_affective_followup`, `last_affective_analyzed_msg_count`, `analyze_and_schedule()`, `evaluate()` (all replaced by the class pattern)
+
+**Temporal (`temporal.py`):**
+- `create_memory()` extracts: `future_mentions` — list of `{ text, when_iso }`
+- Remove: `fired_temporal_mentions`, `mark_fired()`, `evaluate()` (replaced by class pattern)
+
+**Behavioural Gap (`behavioural_gap.py`):**
+- `create_memory()` extracts: `open_intents` — list of `{ intent, stated_at, checked: false }`
+- Remove: `pending_gap_followup`, `last_intent_scan_conversation_id`, `scan_for_gaps()`, `evaluate()`, `clear_followup()` (replaced by class pattern)
+
+**Note:** The `proactiveMemory` document structure in MongoDB should also be reviewed after this change to remove fields that are no longer written.
+
+**Relevant files:**
+- `logic-python/heuristics/affective.py`
+- `logic-python/heuristics/temporal.py`
+- `logic-python/heuristics/behavioural_gap.py`
+- `logic-python/services/llm_service.py` — remove `analyze_conversation_emotion()`, `extract_stated_intents()`, `check_intent_completion()`, `_tag_future_mentions()` (all replaced by per-class LLM calls)
+
+---
+
+### ⬜ Task 6: Data Logging & Questionnaires
+
+**Goal:** Ensure comprehensive tracking of all interactions for thesis analysis. Verify the app correctly serves the selected pre/post-experiment questionnaires.
+
+**Relevant files:**
+- **Data logging — server:**
+  - `Lexi/server/src/models/ConversationsModel.ts`
+  - `Lexi/server/src/models/MetadataConversationsModel.ts`
+  - `Lexi/server/src/services/dataAggregation.service.ts`
+  - `Lexi/server/src/controllers/dataAggregationController.controller.ts`
+  - `Lexi/server/src/routers/dataAggregationRouter.router.ts`
+- **Data logging — Python:**
+  - `logic-python/services/research_service.py` — writes to `proactive_logs` (trigger source, message, group, heuristic, probability used)
+  - `logic-python/utils/mongodb_client.py`
+- **Data logging — client:**
+  - `Lexi/client/src/screens/Admin/components/data-panel/DataPanel.tsx`
+  - `Lexi/client/src/DAL/server-requests/dataAggregation.ts`
+  - `Lexi/client/src/screens/Chat/components/UserAnnotation.tsx`
+- **Questionnaires — server:**
+  - `Lexi/server/src/models/FormsModel.ts`
+  - `Lexi/server/src/services/forms.service.ts`
+  - `Lexi/server/src/controllers/formsController.ts`
+  - `Lexi/server/src/routers/formsRouter.ts`
+  - `Lexi/server/src/types/forms.type.ts`
+- **Questionnaires — client:**
+  - `Lexi/client/src/screens/Chat/ChatPage.tsx`
+  - `Lexi/client/src/components/forms/conversation-form/ConversationForm.tsx`
+  - `Lexi/client/src/screens/Chat/components/side-bar-chat/SideBarChat.tsx`
+  - `Lexi/client/src/screens/Admin/components/forms-panel/FormsPanel.tsx`
+  - `Lexi/client/src/screens/Admin/components/forms-panel/create-form/CreateForm.tsx`
+  - `Lexi/client/src/components/questions/Question.tsx`
+  - `Lexi/client/src/DAL/server-requests/forms.ts`
+
+---
+
+### ⬜ Task 7: Repository Cleanup
+
+**Goal:** Rename project, update UI screenshots, move `AI Guidelines` and similar files to `.gitignore`.
+
+- Rename GitHub repository appropriately
+- Add updated UI screenshots to README
+- Add `AI Guidelines`, local dev notes, and similar files to `.gitignore`
+
+---
+
+<!-- Phase 2: EIF CogAI 2026 Oxford Demo (Branch: oxford-demo) — COMPLETE, branch archived -->
