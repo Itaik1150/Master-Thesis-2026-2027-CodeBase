@@ -40,7 +40,7 @@
 
 ---
 
-### ⬜ Task 3: Heuristic Modularity & Probability-Based Selection
+### ✅ Task 3: Heuristic Modularity & Probability-Based Selection
 
 **This is the biggest architectural change. Read fully before implementing.**
 
@@ -126,7 +126,7 @@ class BaseHeuristic:
 
 ---
 
-### ⬜ Task 4: Dashboard Wiring
+### ✅ Task 4: Dashboard Wiring
 
 **Goal:** Give the researcher full control over the proactive system from the admin UI. Every setting must flow from UI → MongoDB → Python code.
 
@@ -150,6 +150,8 @@ The proactive settings modal must have one row per heuristic (Affective, Tempora
 - `Lexi/server/src/models/ExperimentsModel.ts` — add `heuristicWeights: { affective, temporal, behaviouralGap, generic }` to schema
 - `Lexi/server/src/types/experiments.type.ts`
 
+**✅ Implemented.**
+
 ---
 
 #### 4.2 — Per-Heuristic Prompt Editor
@@ -166,6 +168,8 @@ Each field is pre-populated with the default prompt for that heuristic. A short 
 - `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`
 - `Lexi/server/src/models/ExperimentsModel.ts` — add `heuristicPrompts` object to schema
 - `logic-python/heuristics/base_heuristic.py` — `__init__()` reads prompts from experiment doc
+
+**✅ Implemented.**
 
 ---
 
@@ -184,6 +188,12 @@ Replace the current "interval in minutes" field with a proper schedule UI:
 - `Lexi/server/src/models/ExperimentsModel.ts` — add `schedule: { allowedDays, fireTimes, randomWindows }` to schema
 - `logic-python/scheduler.py` — read `schedule` from DB instead of hardcoded `FIRE_TIMES`
 
+**✅ Implemented.** Day picker (Sun–Sat chips) + exact-times (up to 3) / random-window toggle, all saved to
+`proactiveSettings.schedule`. `scheduler.py` registers one APScheduler job per (experiment, fire time / window)
+at startup, gated by that experiment's own allowed days (`day_of_week` cron filter); random windows use
+APScheduler's `jitter` to fire once at a random minute inside the window. `coordinated_send_and_inject()` also
+re-checks the user's own experiment's allowed days every cycle as a per-user safety net (see 4.5).
+
 ---
 
 #### 4.4 — Scheduler Validation & Cleanup
@@ -195,6 +205,10 @@ Replace the current "interval in minutes" field with a proper schedule UI:
 **Relevant files:**
 - `logic-python/scheduler.py`
 - `logic-python/run_cycle.py`
+
+**✅ Implemented.** `scheduler.py` now reads schedules from MongoDB at startup (falls back to a hardcoded
+default only if MongoDB is unreachable or nothing is configured yet). `run_cycle.py` is repurposed as a
+manual/testing one-shot trigger; all "Render Cron" wording removed from both files.
 
 ---
 
@@ -211,6 +225,11 @@ Write a simple validation log at cycle start: print the active heuristics and th
 - `logic-python/services/research_service.py`
 - `logic-python/utils/mongodb_client.py`
 
+**✅ Implemented.** `_load_experiment_settings()` now also returns `schedule`, logged per-user alongside
+active weights and whether custom prompts are set. A new `_is_today_allowed()` check skips the user if today
+isn't in their experiment's allowed days. The cycle-start banner documents that weights, prompts, and schedule
+are all read live from MongoDB.
+
 ---
 
 #### 4.6 — LLM Model Selector (including Claude)
@@ -218,12 +237,14 @@ Write a simple validation log at cycle start: print the active heuristics and th
 The dashboard already has an LLM model selector. Validate end-to-end:
 - API key for the selected provider (OpenAI / Anthropic) is correctly loaded from environment variables.
 - `llm_service.override_model()` is called at cycle start with the model from the experiment doc.
-- Add a clear explanation in the UI **next to the model selector**: *"This controls which AI model generates all proactive notifications for this experiment. Changing this affects message quality, cost, and generation style. Claude models may produce more nuanced emotional messages."*
+- Add a clear explanation in the UI **next to the model selector**: *"This controls which AI model generates all proactive notifications for this experiment. Changing this affects message quality, cost, and generation style."*
 
 **Relevant files:**
 - `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx` — add tooltip/description
 - `logic-python/services/llm_service.py` — `override_model()`, `_call_llm()`
 - `logic-python/services/research_service.py` — where `override_model()` is called
+
+**✅ Implemented.**
 
 ---
 
@@ -231,17 +252,19 @@ The dashboard already has an LLM model selector. Validate end-to-end:
 
 Each heuristic toggle in the dashboard should have a short, plain-language description that mirrors what the code actually does. Suggested text:
 
-- **Affective:** *"Scans the user's recent conversations for emotional content (stress, sadness, joy). When emotional expressions are found, sends a warm, personalized check-in referencing what the user shared."*
+- **Generic:** *"Sends a simple, friendly invitation to chat — no emotional framing, no specific topic. Used as a control condition or baseline."*
 - **Temporal:** *"Detects when the user has mentioned an upcoming event or plan. Sends a timely message asking how they're preparing or how it went."*
 - **Behavioural Gap:** *"Notices when the user stated an intention (e.g., 'I'll go to the gym tomorrow') but hasn't mentioned it since. Sends a gentle follow-up to check in."*
-- **Generic:** *"Sends a simple, friendly invitation to chat — no emotional framing, no specific topic. Used as a control condition or baseline."*
+- **Affective:** *"Scans the user's recent conversations for emotional content (stress, sadness, joy). When emotional expressions are found, sends a warm, personalized check-in referencing what the user shared."*
 
 **Relevant files:**
 - `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`
 
+**✅ Implemented.** Display order updated to generic → temporal → behavioural gap → affective.
+
 ---
 
-### ⬜ Task 5: Bugs & Cleanup
+### ✅ Task 5: Bugs & Cleanup
 
 ---
 
@@ -261,6 +284,11 @@ The topic-based candidate pool (`build_candidate_pool`, `select_message_for_user
 - `logic-python/services/research_service.py`
 - `logic-python/services/llm_service.py`
 
+**✅ Implemented.** Also removed the now-unreachable Phase-1 experiment helpers that only the candidate pool
+fed into (`_resolve_message()`, `_personalize_context()`, `_generate_affective_default_message()`,
+`_build_generic_message()`, `build_basic_memory()`, `extract_conversation_memory()`, `save_user_memory()`),
+plus the now-unused `NudgeContext`/`DecisionResult` dataclasses in `core/models.py`.
+
 ---
 
 #### 5.2 — Clean Each Heuristic to Its Single Responsibility
@@ -277,7 +305,8 @@ Each heuristic's `create_memory()` must extract **only** what it needs and nothi
 
 **Behavioural Gap (`behavioural_gap.py`):**
 - `create_memory()` extracts: `open_intents` — list of `{ intent, stated_at, checked: false }`
-- Remove: `pending_gap_followup`, `last_intent_scan_conversation_id`, `scan_for_gaps()`, `evaluate()`, `clear_followup()` (replaced by class pattern)
+- Remove: `pending_gap_followup`, `last_intent_scan_conversation_id`, `scan_for_gaps()`, `evaluate()` (replaced by class pattern)
+- `clear_followup()` is kept — it is still called from `BehaviouralGapHeuristic.clear_after_send()`
 
 **Note:** The `proactiveMemory` document structure in MongoDB should also be reviewed after this change to remove fields that are no longer written.
 
@@ -285,7 +314,14 @@ Each heuristic's `create_memory()` must extract **only** what it needs and nothi
 - `logic-python/heuristics/affective.py`
 - `logic-python/heuristics/temporal.py`
 - `logic-python/heuristics/behavioural_gap.py`
-- `logic-python/services/llm_service.py` — remove `analyze_conversation_emotion()`, `extract_stated_intents()`, `check_intent_completion()`, `_tag_future_mentions()` (all replaced by per-class LLM calls)
+- `logic-python/services/llm_service.py` — remove `analyze_conversation_emotion()`, `extract_stated_intents()`, `_tag_future_mentions()`, `extract_user_memory()`, `personalize_from_context()`, `generate_topic_message()` (all replaced by per-class LLM calls). `check_intent_completion()` is **kept** — it's still called live from `BehaviouralGapHeuristic.create_memory()`.
+
+**✅ Implemented.** `affective.py`'s module-level `evaluate()`/`analyze_and_schedule()`/`AffectiveNudge` and its
+now-vestigial `clear_followup()` were removed — nothing writes `pending_affective_followup` anymore (memories
+are marked `used` the instant they're selected), so `AffectiveHeuristic` has no `clear_after_send()` override
+and simply inherits the base no-op. `temporal.py` and `behavioural_gap.py` had their module-level `evaluate()`
+and dataclasses (`TemporalNudge`, `GapNudge`) removed, keeping `mark_fired()` / `clear_followup()` since those
+classes' `clear_after_send()` still calls them.
 
 ---
 

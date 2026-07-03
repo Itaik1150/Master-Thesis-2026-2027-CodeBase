@@ -55,6 +55,15 @@ export const experimentsSchema = new Schema<IExperiment>(
                     behaviouralGap: { memoryPrompt: { type: String, default: '' }, messagePrompt: { type: String, default: '' } },
                     generic:        { memoryPrompt: { type: String, default: '' }, messagePrompt: { type: String, default: '' } },
                 },
+                schedule: {
+                    allowedDays:   { type: [Number], default: [0, 1, 2, 3, 4, 5, 6] }, // 0=Sun .. 6=Sat
+                    mode:          { type: String, default: 'exact' }, // 'exact' | 'random'
+                    fireTimes:     { type: [String], default: ['13:45', '17:30', '21:15'] }, // up to 3 "HH:MM", used when mode='exact'
+                    randomWindows: {
+                        type: [{ start: { type: String }, end: { type: String } }],
+                        default: [{ start: '12:00', end: '14:00' }],
+                    }, // used when mode='random'
+                },
                 llmModel: { type: String, default: 'gpt-4o' },
             }
         },

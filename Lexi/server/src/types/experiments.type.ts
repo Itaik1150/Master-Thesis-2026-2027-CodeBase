@@ -47,15 +47,30 @@ export interface HeuristicPrompts {
     generic?:        HeuristicPromptPair;
 }
 
+/** A single "HH:MM"–"HH:MM" random-fire window. */
+export interface RandomWindow {
+    start: string; // "HH:MM"
+    end:   string; // "HH:MM"
+}
+
+/** Notification schedule: which days are allowed and when to fire each day. */
+export interface ScheduleSettings {
+    allowedDays:   number[];       // 0=Sun .. 6=Sat; multiple non-consecutive ranges allowed
+    mode:          'exact' | 'random';
+    fireTimes:     string[];       // 1–3 "HH:MM" fixed times, used when mode === 'exact'
+    randomWindows: RandomWindow[]; // used when mode === 'random' — fires once at a random minute per window
+}
+
 export interface ExperimentFeatures {
     userAnnotation: boolean;
     streamMessage: boolean;
     proactiveSettings?: {
         enabled: boolean;
-        frequency: number; // in minutes
+        frequency: number; // in minutes (legacy; superseded by `schedule`)
         heuristics?:       ProactiveHeuristicsSettings; // legacy boolean flags (backward compat)
         heuristicWeights?: HeuristicWeights;            // Task 3.1 — probability-based selection
         heuristicPrompts?: HeuristicPrompts;            // Task 4.2 — per-heuristic prompt editor
+        schedule?:         ScheduleSettings;            // Task 4.3 — days & hours scheduling
         llmModel?: string; // e.g. "gpt-4o" | "claude-3-5-sonnet-20241022"
     };
 }

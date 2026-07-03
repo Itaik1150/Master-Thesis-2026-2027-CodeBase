@@ -1,7 +1,17 @@
 """
-One-shot entry point for the Render Cron Job.
-Render calls: python run_cycle.py
-The script runs the full proactive cycle once and exits.
+One-shot manual/testing entry point for the proactive cycle.
+
+Scheduling in production is handled entirely by scheduler.py, which runs as a
+persistent background service and fires run_full_proactive_cycle() according to
+each experiment's dashboard-configured schedule (see Task 4.3/4.4).
+
+This script is useful for manually triggering a single cycle on demand
+(e.g. local testing, or a one-off run from a shell) — it does not run on
+any timer itself.
+
+Usage:
+    cd logic-python
+    python run_cycle.py
 """
 import sys
 import os
@@ -15,13 +25,7 @@ load_dotenv()
 from services.research_service import research_service
 
 if __name__ == "__main__":
-    
-    
-    # Conference demo bypass (has its own time-gate; always run first).
-    # print("🎯 Running Oxford demo cycle...")
-    # research_service.run_oxford_demo_cycle()
-
-    print("🚀 Render cron: starting proactive cycle...")
+    print("🚀 Manual trigger: starting proactive cycle...")
     result = research_service.run_full_proactive_cycle()
     if result.get("success"):
         r = result.get("results", {})

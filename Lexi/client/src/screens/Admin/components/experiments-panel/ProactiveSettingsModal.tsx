@@ -30,6 +30,7 @@ import {
     ExperimentType,
     HeuristicWeights,
     HeuristicPrompts,
+    ScheduleSettings,
 } from '@models/AppModels';
 
 // ── Supported LLM models ───────────────────────────────────────────────────────
@@ -39,6 +40,16 @@ const LLM_MODEL_OPTIONS = [
     { value: 'claude-3-5-sonnet-20241022',   label: 'Claude 3.5 Sonnet (Anthropic)' },
     { value: 'claude-3-opus-20240229',       label: 'Claude 3 Opus (Anthropic — most capable)' },
 ];
+
+// ── Schedule defaults & day labels ──────────────────────────────────────────────
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const DEFAULT_SCHEDULE: ScheduleSettings = {
+    allowedDays: [0, 1, 2, 3, 4, 5, 6],
+    mode: 'exact',
+    fireTimes: ['13:45', '17:30', '21:15'],
+    randomWindows: [{ start: '12:00', end: '14:00' }],
+};
 
 // ── Heuristic metadata ─────────────────────────────────────────────────────────
 type HeuristicKey = 'affective' | 'temporal' | 'behaviouralGap' | 'generic';
@@ -131,7 +142,7 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
     },
 };
 
-const HEURISTIC_KEYS: HeuristicKey[] = ['affective', 'temporal', 'behaviouralGap', 'generic'];
+const HEURISTIC_KEYS: HeuristicKey[] = ['generic', 'temporal', 'behaviouralGap', 'affective'];
 
 // ── Component state types ──────────────────────────────────────────────────────
 interface HeuristicRowState {
@@ -192,6 +203,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     const [frequency,        setFrequency]        = useState(30);
     const [llmModel,         setLlmModel]         = useState('gpt-4o');
     const [configs,          setConfigs]          = useState<HeuristicConfigs>(buildDefaultConfigs);
+    const [schedule,         setSchedule]         = useState<ScheduleSettings>(DEFAULT_SCHEDULE);
     const [isLoading,        setIsLoading]        = useState(false);
 
     const serverBase = process.env.REACT_APP_API_URL || 'https://lexi-server-1rx9.onrender.com';
@@ -206,11 +218,18 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             setFrequency(ps.frequency ?? 30);
             setLlmModel(ps.llmModel ?? 'gpt-4o');
             setConfigs(initConfigs(ps.heuristicWeights, ps.heuristicPrompts));
+            setSchedule({
+                allowedDays:   ps.schedule?.allowedDays?.length   ? ps.schedule.allowedDays   : DEFAULT_SCHEDULE.allowedDays,
+                mode:          ps.schedule?.mode                  ?? DEFAULT_SCHEDULE.mode,
+                fireTimes:     ps.schedule?.fireTimes?.length     ? ps.schedule.fireTimes     : DEFAULT_SCHEDULE.fireTimes,
+                randomWindows: ps.schedule?.randomWindows?.length ? ps.schedule.randomWindows : DEFAULT_SCHEDULE.randomWindows,
+            });
         } else {
             setProactiveEnabled(false);
             setFrequency(30);
             setLlmModel('gpt-4o');
             setConfigs(buildDefaultConfigs());
+            setSchedule(DEFAULT_SCHEDULE);
         }
     }, [experiment]);
 
@@ -221,6 +240,9 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     );
     const anyEnabled   = HEURISTIC_KEYS.some(k => configs[k].enabled);
     const isWeightValid = !anyEnabled || totalWeight === 100;
+    const isScheduleValid =
+        schedule.allowedDays.length > 0 &&
+        (schedule.mode === 'exact' ? schedule.fireTimes.length > 0 : schedule.randomWindows.length > 0);
 
     // ── Row handlers ───────────────────────────────────────────────────────────
     const toggleHeuristic = (key: HeuristicKey) => {
@@ -256,11 +278,62 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
         }));
     };
 
+    // ── Schedule handlers ────────────────────────────────────────────────────────
+    const toggleDay = (day: number) => {
+        setSchedule(prev => {
+            const has = prev.allowedDays.includes(day);
+            const allowedDays = has
+                ? prev.allowedDays.filter(d => d !== day)
+                : [...prev.allowedDays, day].sort();
+            return { ...prev, allowedDays };
+        });
+    };
+
+    const setScheduleMode = (mode: 'exact' | 'random') => {
+        setSchedule(prev => ({ ...prev, mode }));
+    };
+
+    const setFireTime = (index: number, value: string) => {
+        setSchedule(prev => {
+            const fireTimes = [...prev.fireTimes];
+            fireTimes[index] = value;
+            return { ...prev, fireTimes };
+        });
+    };
+
+    const addFireTime = () => {
+        setSchedule(prev =>
+            prev.fireTimes.length >= 3 ? prev : { ...prev, fireTimes: [...prev.fireTimes, '12:00'] },
+        );
+    };
+
+    const removeFireTime = (index: number) => {
+        setSchedule(prev => ({
+            ...prev,
+            fireTimes: prev.fireTimes.filter((_, i) => i !== index),
+        }));
+    };
+
+    const setRandomWindow = (field: 'start' | 'end', value: string) => {
+        setSchedule(prev => {
+            const windows = prev.randomWindows.length ? [...prev.randomWindows] : [{ start: '12:00', end: '14:00' }];
+            windows[0] = { ...windows[0], [field]: value };
+            return { ...prev, randomWindows: windows };
+        });
+    };
+
     // ── Save ───────────────────────────────────────────────────────────────────
     const handleSave = async () => {
         if (!isWeightValid) {
             openSnackbar(
                 `Active heuristic weights must sum to 100% (current: ${totalWeight}%)`,
+                SnackbarStatus.ERROR,
+            );
+            return;
+        }
+        if (!isScheduleValid) {
+            openSnackbar(
+                'Select at least one allowed day and at least one fire time / random window',
                 SnackbarStatus.ERROR,
             );
             return;
@@ -303,6 +376,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                         heuristics:       experiment.experimentFeatures?.proactiveSettings?.heuristics, // keep legacy
                         heuristicWeights,
                         heuristicPrompts,
+                        schedule,
                         llmModel,
                     },
                 },
@@ -350,20 +424,119 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                         />
                     </Box>
 
-                    {/* ── Frequency ──────────────────────────────────────────── */}
+                    {/* ── Schedule: Days & Hours ──────────────────────────────── */}
                     <Box>
-                        <Typography variant="body2" color="textSecondary" gutterBottom>
-                            Notification Frequency (minutes)
+                        <Typography variant="body1" fontWeight={500} gutterBottom>
+                            Notification Schedule
                         </Typography>
-                        <TextField
-                            type="number"
-                            value={frequency}
-                            onChange={e => setFrequency(Number(e.target.value))}
-                            size="small"
-                            disabled={!proactiveEnabled}
-                            helperText="Minimum interval between two notifications for the same user"
-                            inputProps={{ min: 1, max: 1440 }}
-                        />
+
+                        {/* Allowed days */}
+                        <Typography variant="caption" color="textSecondary" sx={{ mb: 0.5, display: 'block' }}>
+                            Allowed days
+                        </Typography>
+                        <Box display="flex" gap={0.5} flexWrap="wrap" mb={2}>
+                            {DAY_LABELS.map((label, day) => (
+                                <Chip
+                                    key={day}
+                                    label={label}
+                                    clickable={proactiveEnabled}
+                                    onClick={() => proactiveEnabled && toggleDay(day)}
+                                    color={schedule.allowedDays.includes(day) ? 'primary' : 'default'}
+                                    variant={schedule.allowedDays.includes(day) ? 'filled' : 'outlined'}
+                                    size="small"
+                                    sx={{ opacity: proactiveEnabled ? 1 : 0.5 }}
+                                />
+                            ))}
+                        </Box>
+
+                        {/* Exact vs random mode */}
+                        <Typography variant="caption" color="textSecondary" sx={{ mb: 0.5, display: 'block' }}>
+                            Notification times
+                        </Typography>
+                        <Box display="flex" gap={1} mb={1.5}>
+                            <Chip
+                                label="Exact times"
+                                clickable={proactiveEnabled}
+                                onClick={() => proactiveEnabled && setScheduleMode('exact')}
+                                color={schedule.mode === 'exact' ? 'primary' : 'default'}
+                                variant={schedule.mode === 'exact' ? 'filled' : 'outlined'}
+                                size="small"
+                            />
+                            <Chip
+                                label="Random window"
+                                clickable={proactiveEnabled}
+                                onClick={() => proactiveEnabled && setScheduleMode('random')}
+                                color={schedule.mode === 'random' ? 'primary' : 'default'}
+                                variant={schedule.mode === 'random' ? 'filled' : 'outlined'}
+                                size="small"
+                            />
+                        </Box>
+
+                        {schedule.mode === 'exact' ? (
+                            <Box display="flex" flexDirection="column" gap={1}>
+                                {schedule.fireTimes.map((time, idx) => (
+                                    <Box key={idx} display="flex" alignItems="center" gap={1}>
+                                        <TextField
+                                            type="time"
+                                            value={time}
+                                            onChange={e => setFireTime(idx, e.target.value)}
+                                            size="small"
+                                            disabled={!proactiveEnabled}
+                                            sx={{ width: 150 }}
+                                        />
+                                        <IconButton
+                                            size="small"
+                                            onClick={() => removeFireTime(idx)}
+                                            disabled={!proactiveEnabled || schedule.fireTimes.length <= 1}
+                                        >
+                                            ✕
+                                        </IconButton>
+                                    </Box>
+                                ))}
+                                <Button
+                                    size="small"
+                                    onClick={addFireTime}
+                                    disabled={!proactiveEnabled || schedule.fireTimes.length >= 3}
+                                    sx={{ alignSelf: 'flex-start', textTransform: 'none' }}
+                                >
+                                    + Add time (up to 3)
+                                </Button>
+                            </Box>
+                        ) : (
+                            <Box display="flex" alignItems="center" gap={1}>
+                                <TextField
+                                    type="time"
+                                    label="Window start"
+                                    value={schedule.randomWindows[0]?.start ?? '12:00'}
+                                    onChange={e => setRandomWindow('start', e.target.value)}
+                                    size="small"
+                                    disabled={!proactiveEnabled}
+                                    InputLabelProps={{ shrink: true }}
+                                    sx={{ width: 160 }}
+                                />
+                                <Typography variant="body2" color="textSecondary">to</Typography>
+                                <TextField
+                                    type="time"
+                                    label="Window end"
+                                    value={schedule.randomWindows[0]?.end ?? '14:00'}
+                                    onChange={e => setRandomWindow('end', e.target.value)}
+                                    size="small"
+                                    disabled={!proactiveEnabled}
+                                    InputLabelProps={{ shrink: true }}
+                                    sx={{ width: 160 }}
+                                />
+                            </Box>
+                        )}
+                        <Typography variant="caption" color="textSecondary" sx={{ mt: 1, display: 'block' }}>
+                            {schedule.mode === 'exact'
+                                ? 'The system fires a cycle at each exact time above, on the allowed days only.'
+                                : 'The system fires once at a random minute within this window, on the allowed days only.'}
+                        </Typography>
+                        {!isScheduleValid && (
+                            <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
+                                Select at least one allowed day and at least one time.
+                            </Typography>
+                        )}
                     </Box>
 
                     <Divider />
@@ -590,7 +763,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                     onClick={handleSave}
                     color="primary"
                     variant="contained"
-                    disabled={isLoading || (anyEnabled && !isWeightValid)}
+                    disabled={isLoading || (anyEnabled && !isWeightValid) || !isScheduleValid}
                 >
                     {isLoading ? 'Saving…' : 'Save'}
                 </Button>
