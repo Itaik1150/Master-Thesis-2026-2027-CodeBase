@@ -167,18 +167,25 @@ def register_jobs(scheduler: BlockingScheduler, schedules) -> int:
                 window_seconds = max(
                     0, (end_h * 3600 + end_m * 60) - (start_h * 3600 + start_m * 60)
                 )
-                job_id = f"proactive_{exp_id}_rand{w_idx}"
-                scheduler.add_job(
-                    proactive_job, "cron",
-                    day_of_week=dow, hour=start_h, minute=start_m,
-                    jitter=window_seconds if window_seconds > 0 else None,
-                    id=job_id, replace_existing=True,
-                )
-                print(f"   🎲 Random window job [{job_id}]: {window['start']}–{window['end']} "
+                # Task 6.4: register `count` separate jobs per window so multiple
+                # notifications can be distributed within the same time range.
+                # Each job uses jitter to fire at a distinct random minute.
+                count = max(1, int(window.get("count") or 1))
+                for n in range(count):
+                    job_id = f"proactive_{exp_id}_rand{w_idx}_{n}"
+                    scheduler.add_job(
+                        proactive_job, "cron",
+                        day_of_week=dow, hour=start_h, minute=start_m,
+                        jitter=window_seconds if window_seconds > 0 else None,
+                        id=job_id, replace_existing=True,
+                    )
+                    job_count += 1
+                print(f"   🎲 Registered {count} random job(s) in window "
+                      f"{window['start']}–{window['end']} for experiment {exp_id[:8]} "
                       f"({dow}), jitter={window_seconds}s")
-                job_count += 1
         else:
-            for time_str in sched["fire_times"][:3]:  # cap at 3 exact times per experiment
+            # Task 6.4: no cap on exact fire times (previously capped at 3)
+            for time_str in sched["fire_times"]:
                 try:
                     h, m = map(int, time_str.split(":"))
                 except ValueError:

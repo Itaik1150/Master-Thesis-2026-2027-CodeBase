@@ -325,7 +325,227 @@ classes' `clear_after_send()` still calls them.
 
 ---
 
-### ⬜ Task 6: Data Logging & Questionnaires
+### ⬜ Task 6: System Hardening & Architectural Refinement
+
+---
+
+#### 6.1 — Experiment-Level Group Assignment
+
+**Goal:** Remove the user-level A/B group (`proactiveGroup`) entirely. Proactive behavior is defined exclusively by the experiment's `heuristicWeights` — no user document should carry a type override.
+
+**Current state:** `users.service.ts` randomly assigns every new user to `'affective' | 'generic' | 'reactive'`. `get_all_proactive_users()` filters on `"proactiveGroup": {"$ne": "reactive"}`. `coordinated_send_and_inject()` reads `user.proactiveGroup` and passes it to `log_proactive_event()`.
+
+**Changes required:**
+- `Lexi/server/src/services/users.service.ts` — Delete the 3-line random group assignment block (~lines 38–40). Remove `proactiveGroup` from the `UsersModel.create(...)` call.
+- `Lexi/server/src/models/UsersModel.ts` — Change `proactiveGroup` to optional (`required: false`). **Do not delete the field** — existing user docs in MongoDB still carry it and must not break reads.
+- `Lexi/server/src/types/users.type.ts` — Confirm `proactiveGroup?` is already optional.
+- `logic-python/services/research_service.py` → `get_all_proactive_users()`: Remove `"proactiveGroup": {"$ne": "reactive"}` filter. The Reactive gate is enforced exclusively by `_select_heuristic()`.
+- `logic-python/services/research_service.py` → `coordinated_send_and_inject()`: Remove `proactive_group = user.get('proactiveGroup', 'generic')`. Derive `experiment_type` from the dominant heuristic weight (key with highest non-reactive weight) and pass to `log_proactive_event()`.
+- `logic-python/services/research_service.py` → `log_proactive_event()`: Rename `proactive_group` → `experiment_type`.
+
+**Data flow:**
+```
+Experiment doc (heuristicWeights) → _select_heuristic() → heuristic class → message sent
+                                                                           ↓
+                                                             log_proactive_event(experiment_type=dominant_key)
+```
+
+---
+
+#### 6.2 — Uniform Heuristic Fallbacks
+
+**Goal:** Every heuristic that can be selected must always return a message. No heuristic may silently return `None` when selected — this corrupts the researcher's intended probability distribution.
+
+**Current state:** `AffectiveHeuristic` and `GenericHeuristic` already guarantee a message. `TemporalHeuristic.get_proactive_message()` returns `None` when no event is in the 6–24 h window. `BehaviouralGapHeuristic.get_proactive_message()` returns `None` when no `pending_gap_followup` exists.
+
+**Changes required:**
+- `logic-python/heuristics/base_heuristic.py` → `BaseHeuristic`: Add shared helper `_cold_start_message(prompt, static_fallback, user_content=None) -> str` that encapsulates the LLM call + static-string fallback pattern (DRY).
+- `logic-python/heuristics/temporal.py` → `TemporalHeuristic`: Add `_COLD_START_PROMPT` class attribute. Replace `return None` (when `not self._fired_nudge`) with a cold-start LLM call via `_cold_start_message()`, static fallback: `f"Hi {self.name}, anything exciting coming up soon?"`. Log: `🕐 [{username}] Temporal cold-start — no event in window`.
+- `logic-python/heuristics/behavioural_gap.py` → `BehaviouralGapHeuristic`: Add `_COLD_START_PROMPT`. Replace all `return None` guards with cold-start fallback, static fallback: `f"Hi {self.name}, how have you been doing with your plans lately?"`. Log: `🔍 [{username}] Gap cold-start — no pending followup`.
+- `logic-python/services/research_service.py` → `_run_selected_heuristic()`: Update the `if not text` guard to emit `❌ UNEXPECTED: {selected} returned None after fallback`.
+
+**Integration note:** `BaseHeuristic` already exposes `self.name` and `self._target_lang`; cold-start prompts use both.
+
+---
+
+#### 6.3 — Language Preference Fix
+
+**Goal:** Proactive notifications must be sent in the user's preferred language, consistently, via a single authoritative cascade.
+
+**Current state:** `BaseHeuristic.__init__` reads only `user.proactiveMemory.preferred_language`, defaulting to `"he"`. New users silently default to Hebrew regardless of their actual preference.
+
+**Changes required:**
+- `logic-python/heuristics/base_heuristic.py` → `BaseHeuristic.__init__()`: Implement a 3-level language cascade: (1) `proactiveMemory.preferred_language`, (2) `user.language` top-level field, (3) `default_language` param from experiment settings, (4) hardcoded `"he"`. Add `default_language: str = "he"` to `__init__` signature. Log: `🌐 [{username}] Language resolved: {self.language}`.
+- `logic-python/services/research_service.py` → `_load_experiment_settings()`: Read `ps.get("defaultLanguage", "he")` and return it as the 6th element of the return tuple.
+- `logic-python/services/research_service.py` → `_run_selected_heuristic()`: Add `default_language` parameter; pass to all heuristic constructors.
+- `logic-python/services/research_service.py` → `coordinated_send_and_inject()`: Remove the standalone `language = existing_pm.get(...)` line — language is now fully owned by `BaseHeuristic`.
+- `Lexi/server/src/models/ExperimentsModel.ts` → `proactiveSettings`: Add `defaultLanguage: { type: String, default: 'he' }`.
+
+**Data flow:**
+```
+user.proactiveMemory.preferred_language
+  → user.language (top-level)
+    → experiment.proactiveSettings.defaultLanguage
+      → "he" (absolute last resort)
+        → BaseHeuristic.self.language → _target_lang → {language} in prompts
+```
+
+---
+
+#### 6.4 — Advanced Scheduling Flexibility
+
+**Goal:** Allow unlimited exact fire times; let researchers specify how many notifications fire within a random window; display the active timezone on the UI.
+
+**Current state:** `fireTimes` is capped at 3 by the UI. Random windows have no count field. Timezone is not displayed.
+
+**Changes required:**
+
+- `Lexi/server/src/models/ExperimentsModel.ts`: Extend `randomWindows` schema to include `count: { type: Number, default: 1 }`.
+- `Lexi/client/src/models/AppModels.ts`: Update `RandomWindow` interface to `{ start: string; end: string; count: number }`.
+- `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`:
+  - Remove `prev.fireTimes.length >= 3` guard in `addFireTime()`. Change button label from `"+ Add time (up to 3)"` to `"+ Add time"`.
+  - `setRandomWindow()`: extend to handle `count` field mutations.
+  - Add count `TextField` (`type="number"`, min 1, max 20) next to each random window row.
+  - Add static `Typography`: `Timezone: Asia/Jerusalem (Israel Standard Time / Israel Daylight Time)` below the schedule section. Non-editable.
+- `logic-python/scheduler.py` → `register_jobs()`: For random-window mode, remove `[:3]` cap on exact times. For each window, register `count` separate APScheduler jobs, each with `jitter` so they fire at distinct random minutes within the window.
+
+---
+
+#### 6.5 — Prompt Safety & Separation
+
+**Goal:** Researchers write only the persona/task portion of prompts. All structural formatting instructions live exclusively in the backend.
+
+**Current state:** `DEFAULT_MEMORY_PROMPT` strings embed JSON schema instructions. If a researcher omits them while editing in the dashboard, the LLM returns malformed output and the cycle crashes on `json.loads()`.
+
+**Changes required:**
+
+- `logic-python/heuristics/base_heuristic.py` → `BaseHeuristic`: Add `STRUCTURAL_JSON_SUFFIX` and `STRUCTURAL_MESSAGE_SUFFIX` class constants. Add helpers `_safe_memory_prompt(prompt) -> str` and `_safe_message_prompt(prompt) -> str` that append the respective suffix.
+- `logic-python/heuristics/affective.py`, `temporal.py`, `behavioural_gap.py`, `generic.py`:
+  - `DEFAULT_MEMORY_PROMPT`: Remove `"Return ONLY valid JSON: ..."` lines — handled by `_safe_memory_prompt()`.
+  - `DEFAULT_MESSAGE_PROMPT` and `_COLD_START_PROMPT`: Remove `"Return ONLY the final message..."` lines — handled by `_safe_message_prompt()`.
+  - In `create_memory()`: wrap `self.memory_prompt` with `self._safe_memory_prompt(...)`.
+  - In `get_proactive_message()`: wrap message system prompt with `self._safe_message_prompt(...)`.
+- `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`:
+  - Strip the structural `"Return ONLY..."` lines from `defaultMemoryPrompt` / `defaultMessagePrompt` in the `HEURISTICS` constant (so reset-to-defaults reflects the clean researcher-facing text).
+  - Add helper text below Memory Prompt and Message Prompt `TextField`s: `"Write the persona and task instructions only. Formatting and output constraints are automatically added by the system."`
+
+---
+
+#### 6.6 — Independent Conversation Analysis
+
+**Goal:** Each heuristic tracks which conversations it has processed using its own independent field. No heuristic's scan state can block another heuristic from reading the same conversation.
+
+**Current state:** `BehaviouralGapHeuristic` uses a single `last_intent_scan_conversation_id` cursor — once it scans a conversation, that conversation is forever excluded even if new messages were added. No protection against future accidental cross-heuristic field writes.
+
+**Changes required:**
+
+- `logic-python/heuristics/behavioural_gap.py` → `BehaviouralGapHeuristic.create_memory()`:
+  - Replace `last_intent_scan_conversation_id` (single cursor) with `gap_scanned_conversation_ids` (set of IDs). On each call: load the set, scan all recent conversations (last 3) whose IDs are NOT in the set, extract intents, then add their IDs using `$addToSet` (idempotent).
+- `logic-python/heuristics/affective.py` → `AffectiveHeuristic.create_memory()`: Add comment that `last_affective_analyzed_msg_count` is private to this heuristic and must never be read or written by sibling heuristics.
+- `logic-python/heuristics/temporal.py` → `TemporalHeuristic`: Add comment confirming independence (deduplicates by mention text, no shared scan cursor).
+- `logic-python/heuristics/base_heuristic.py` → `BaseHeuristic` docstring: Add tracking field convention rule: *"Each subclass MUST use its own namespaced tracking field inside `proactiveMemory`. Prefix with the heuristic name (e.g., `affective_`, `gap_`, `temporal_`). Never read or write a sibling heuristic's tracking field."*
+
+**MongoDB field rename (migration):** `last_intent_scan_conversation_id` → replaced by `gap_scanned_conversation_ids`. Existing documents with the old field are ignored (harmless). No migration script needed.
+
+---
+
+#### 6.7 — Metrics & Logging Organization
+
+**Goal:** Every `proactive_logs` document contains sufficient structured data for thesis analysis without post-hoc joins.
+
+**Current log schema (as-is):** `cycle_id`, `timestamp`, `user_id`, `trigger_source`, `generated_message`, `topic_label`, `status`, `notification_id`, `proactive_group`, `llm_response` (always `{}`).
+
+**New fields to add:**
+
+| Field | Type | Source | Analytical value |
+|---|---|---|---|
+| `experiment_id` | str | `user.experimentId` | Group logs by experiment |
+| `experiment_type` | str | dominant heuristic key | Identify condition |
+| `heuristic_selected` | str | selected name (explicit) | Frequency distribution |
+| `was_fallback` | bool | `heuristic.used_fallback` | Measure cold-start rate |
+| `memory_content` | str (≤120 chars) | `heuristic.memory_content` | Qualitative audit |
+| `language` | str (`he`/`en`) | `heuristic.language` | Language distribution |
+| `heuristic_weights_snapshot` | dict | active weights | Reproduce randomisation |
+| `llm_model` | str | `experiment_llm_model` | Cost/quality attribution |
+
+**Changes required:**
+- `logic-python/heuristics/base_heuristic.py` → `BaseHeuristic.__init__()`: Add `self.used_fallback: bool = False` and `self.memory_content: str = ""`.
+- `logic-python/heuristics/affective.py`, `temporal.py`, `behavioural_gap.py`, `generic.py`: In `get_proactive_message()`: set `self.used_fallback = True` on cold-start path; `self.memory_content = content[:120]` when a specific memory is selected.
+- `logic-python/services/research_service.py` → `_run_selected_heuristic()`: After `h.get_proactive_message()`, read `h.used_fallback`, `h.memory_content`, `h.language` and add to returned message dict.
+- `logic-python/services/research_service.py` → `log_proactive_event()`: Extend signature and log entry with all new fields.
+- `logic-python/services/research_service.py` → `coordinated_send_and_inject()`: Pass `experiment_id`, `heuristic_weights`, `llm_model` to `log_proactive_event()`.
+
+**Deducible metrics for thesis:**
+- Heuristic selection frequency (GROUP BY `heuristic_selected`)
+- Cold-start rate per heuristic (WHERE `was_fallback = true`)
+- Notification volume per user per day (GROUP BY `user_id, date(timestamp)`)
+- Language distribution (GROUP BY `language`)
+- LLM model cost attribution (GROUP BY `llm_model`)
+- Delivery success rate (WHERE `status = "sent"` / total)
+
+---
+
+#### 6.8 — Dashboard Control for Daily Notification Limit
+
+**Goal:** Remove `MAX_DAILY_NOTIFICATIONS = 999` hardcoded constant; give the researcher full control from the dashboard.
+
+**Current state:** `research_service.py` line 13: `MAX_DAILY_NOTIFICATIONS = 999`, read in `get_proactive_users_with_rate_limit()`.
+
+**Changes required:**
+- `Lexi/server/src/models/ExperimentsModel.ts` → `proactiveSettings`: Add `maxDailyNotifications: { type: Number, default: 3 }`.
+- `Lexi/client/src/models/AppModels.ts` → `proactiveSettings`: Add `maxDailyNotifications?: number`.
+- `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`: Add `TextField` (`type="number"`, min 1) labelled `"Max notifications per user per day"` below the schedule section. Initialize from `ps.maxDailyNotifications ?? 3`. Include in `handleSave()`.
+- `logic-python/services/research_service.py`:
+  - Delete `MAX_DAILY_NOTIFICATIONS = 999`.
+  - `_load_experiment_settings()`: Read `ps.get("maxDailyNotifications", 3)`, return as 5th element of tuple.
+  - `get_proactive_users_with_rate_limit()`: Cache per-experiment caps by experiment ID. Load cap from `_load_experiment_settings()` per experiment (not per user). Use per-experiment cap instead of the removed constant. Restructure the loop to open/close a connection per-user (avoids conflict with `_load_experiment_settings()`'s own connection lifecycle).
+
+**Data flow:**
+```
+Dashboard (maxDailyNotifications) → MongoDB (proactiveSettings.maxDailyNotifications)
+  → _load_experiment_settings() [5th return value]
+    → get_proactive_users_with_rate_limit() [per-experiment cap]
+      → daily_count >= cap → skip
+```
+
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### ⬜ Task 7: Data Logging & Questionnaires
 
 **Goal:** Ensure comprehensive tracking of all interactions for thesis analysis. Verify the app correctly serves the selected pre/post-experiment questionnaires.
 
@@ -360,7 +580,7 @@ classes' `clear_after_send()` still calls them.
 
 ---
 
-### ⬜ Task 7: Repository Cleanup
+### ⬜ Task 8: Repository Cleanup
 
 **Goal:** Rename project, update UI screenshots, move `AI Guidelines` and similar files to `.gitignore`.
 

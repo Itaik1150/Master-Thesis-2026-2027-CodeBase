@@ -11,6 +11,13 @@ Logic:
     window), and has not already been fired, generate a message about it.
   - After a successful FCM send, mark_fired() stamps the mention so it never
     triggers a second time.
+  - If no qualifying event exists this cycle, a warm cold-start invitation is
+    generated instead (Task 6.2: guaranteed fallback — never returns None).
+
+Task 6.6 note: TemporalHeuristic deduplicates by mention text stored in
+  proactiveMemory.future_mentions and proactiveMemory.fired_temporal_mentions.
+  Both fields are PRIVATE to TemporalHeuristic and must not be read or
+  written by any other heuristic.
 """
 
 from __future__ import annotations
@@ -26,9 +33,6 @@ from heuristics.base_heuristic import BaseHeuristic
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 # Window in which we consider an upcoming event "close enough" to act on.
-# Events further than LEAD_TIME_MAX_HOURS away are skipped this cycle (they'll
-# be caught in a later cycle). Events closer than LEAD_TIME_MIN_HOURS are also
-# skipped — too close to meaningfully prepare the user.
 LEAD_TIME_MIN_HOURS: float = 6
 LEAD_TIME_MAX_HOURS: float = 24
 # ──────────────────────────────────────────────────────────────────────────────
@@ -39,9 +43,6 @@ def mark_fired(user_id: str, mention_text: str, when_iso: str, mongodb_client) -
     Stamp a temporal mention as fired on the user's MongoDB document so it
     cannot trigger a second notification. Uses $addToSet so duplicate calls
     are safe.
-
-    mongodb_client must be the module-level singleton from utils/mongodb_client.py.
-    This method opens and closes its own connection.
     """
     from bson import ObjectId
 
@@ -62,10 +63,7 @@ def mark_fired(user_id: str, mention_text: str, when_iso: str, mongodb_client) -
 
 
 def _make_key(text: str, when_iso: str) -> str:
-    """
-    Stable, collision-resistant key for a (mention, datetime) pair.
-    Used to track which temporal mentions have already triggered a nudge.
-    """
+    """Stable key for a (mention, datetime) pair to track which mentions have fired."""
     return f"{text[:50].strip()}|{when_iso}"
 
 
@@ -80,7 +78,8 @@ class TemporalHeuristic(BaseHeuristic):
     Fired-once: proactiveMemory.fired_temporal_mentions (set of keys) ensures
     each event triggers at most one notification.
 
-    Returns None from get_proactive_message() when no qualifying event is found.
+    Task 6.2: get_proactive_message() always returns a message — if no qualifying
+    event is found, a warm cold-start invitation is generated instead of None.
     """
 
     DEFAULT_MEMORY_PROMPT = (
@@ -90,7 +89,7 @@ class TemporalHeuristic(BaseHeuristic):
         '  "text":     concise description (e.g. "job interview", "doctor appointment")\n'
         '  "when_iso": ISO 8601 datetime string if timing is mentioned, or null if unclear\n\n'
         "Today is {today_iso}. Resolve all relative dates against today.\n"
-        "Return ONLY valid JSON: {\"future_mentions\": [...]}\n"
+        "Schema: {\"future_mentions\": [{text, when_iso}]}\n"
         'Return {"future_mentions": []} if no future events are mentioned.'
     )
 
@@ -100,14 +99,20 @@ class TemporalHeuristic(BaseHeuristic):
         "If the event is still ahead: ask if they are ready or excited.\n"
         "If the event just passed: ask how it went.\n"
         "Never confuse past and future timing. "
-        "You MAY use the user's name once. "
-        "Return ONLY the final message, no quotes or explanations."
+        "You MAY use the user's name once."
+    )
+
+    _COLD_START_PROMPT = (
+        "You are a friendly, curious assistant.\n"
+        "Generate a warm, open-ended question in {language} (max 15 words) "
+        "inviting the user to share any upcoming plans or events they are looking forward to.\n"
+        "Use the user's name naturally."
     )
 
     _CONV_SCAN_LIMIT: int = 5
 
-    def __init__(self, user, llm_service, mongodb_client, prompts_from_db=None):
-        super().__init__(user, llm_service, mongodb_client, prompts_from_db)
+    def __init__(self, user, llm_service, mongodb_client, prompts_from_db=None, default_language="he"):
+        super().__init__(user, llm_service, mongodb_client, prompts_from_db, default_language)
         self._fired_nudge: Optional[dict] = None  # set in get_proactive_message
 
     def create_memory(self) -> None:
@@ -148,7 +153,10 @@ class TemporalHeuristic(BaseHeuristic):
         # ── Phase B: LLM extraction ────────────────────────────────────────────
         today_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         joined = "\n".join(f"- {m}" for m in all_texts[-40:] if m)
-        system = self.memory_prompt.replace("{today_iso}", today_iso)
+        # _safe_memory_prompt appends STRUCTURAL_JSON_SUFFIX (Task 6.5)
+        system = self._safe_memory_prompt(
+            self.memory_prompt.replace("{today_iso}", today_iso)
+        )
 
         new_mentions = []
         try:
@@ -206,8 +214,9 @@ class TemporalHeuristic(BaseHeuristic):
 
     def get_proactive_message(self) -> Optional[str]:
         """
-        Returns a message if a future mention falls in the 6–24h window,
-        otherwise returns None (heuristic has nothing to send this cycle).
+        Returns a message if a future mention falls in the 6–24h window.
+        Task 6.2: if no qualifying event exists, generates a warm cold-start
+        invitation instead of returning None (guaranteed fallback).
         """
         self.create_memory()
         self._reload_user()
@@ -242,13 +251,28 @@ class TemporalHeuristic(BaseHeuristic):
                 break
 
         if not self._fired_nudge:
-            return None  # Nothing in the lead-time window this cycle
+            # Task 6.2: cold-start — no event in lead-time window this cycle
+            # Task 6.7: mark as fallback path
+            print(f"🕐 [{self.username}] Temporal cold-start — no event in window")
+            self.used_fallback  = True
+            self.memory_content = ""
+            prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            return self._cold_start_message(
+                prompt=prompt,
+                static_fallback=f"Hi {self.name}, anything exciting coming up soon?",
+            )
 
         n = self._fired_nudge
         print(f"🕐 [{self.username}] Temporal event in window: '{n['mention_text'][:40]}' "
               f"({n['hours_until']:.1f}h away)")
 
-        system = self.message_prompt.replace("{language}", self._target_lang)
+        # Task 6.7: record which event drove this message
+        self.memory_content = n["mention_text"][:120]
+        self.used_fallback  = False
+
+        system = self._safe_message_prompt(
+            self.message_prompt.replace("{language}", self._target_lang)
+        )
         user_content = (
             f"USER NAME: {self.name}\n"
             f"EVENT: {n['mention_text']}\n"

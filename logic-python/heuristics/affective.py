@@ -12,6 +12,10 @@ are selected, so each one fires at most once.
 MongoDB fields used (all inside proactiveMemory):
   emotional_memories: [{content, affective_score, timestamp_iso, used}]
   last_affective_analyzed_msg_count: int — total user messages seen at last analysis.
+
+Task 6.6 note: last_affective_analyzed_msg_count is PRIVATE to AffectiveHeuristic.
+  No other heuristic must read or write this field. Its name is intentionally
+  prefixed with "affective_" (abbreviated as "last_affective_") to enforce isolation.
 """
 
 from __future__ import annotations
@@ -47,7 +51,7 @@ class AffectiveHeuristic(BaseHeuristic):
         '  "affective_score": integer 1–10 (1=mildly emotional, 10=deeply personal/distressing)\n'
         '  "timestamp_iso":  use today\'s ISO datetime for all items\n'
         '  "used":           false\n\n'
-        "Return ONLY valid JSON: {\"emotional_memories\": [...]}\n"
+        "Schema: {\"emotional_memories\": [{content, affective_score, timestamp_iso, used}]}\n"
         "Exclude casual mentions, surface-level topics, or purely factual statements.\n"
         'Return {"emotional_memories": []} if no genuine emotional content is present.'
     )
@@ -58,16 +62,14 @@ class AffectiveHeuristic(BaseHeuristic):
         "that directly references the specific emotional memory the user shared.\n"
         "Acknowledge their feelings without being dramatic or clinical.\n"
         "Invite them to share how they are feeling about it now.\n"
-        "You MAY use the user's name once if it feels natural.\n"
-        "Return ONLY the final message, no quotes or explanations."
+        "You MAY use the user's name once if it feels natural."
     )
 
     _COLD_START_PROMPT = (
         "You are an empathetic assistant that encourages emotional sharing.\n"
         "Generate a gentle, warm invitation in {language} (max 15 words) "
         "focused on emotional support and being a listening ear today.\n"
-        "Use the user's name naturally.\n"
-        "Return ONLY the final message, no quotes or explanations."
+        "Use the user's name naturally."
     )
 
     _MEMORY_EXPIRY_HOURS: int = 72
@@ -114,7 +116,10 @@ class AffectiveHeuristic(BaseHeuristic):
         # ── Phase B: LLM extraction (outside DB connection) ────────────────────
         today_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         joined = "\n".join(f"- {m}" for m in all_texts[-20:] if m)
-        system = self.memory_prompt.replace("{today_iso}", today_iso)
+        # _safe_memory_prompt appends STRUCTURAL_JSON_SUFFIX (Task 6.5)
+        system = self._safe_memory_prompt(
+            self.memory_prompt.replace("{today_iso}", today_iso)
+        )
 
         new_memories = []
         try:
@@ -163,6 +168,7 @@ class AffectiveHeuristic(BaseHeuristic):
         - context-rich path: picks the best unused emotional memory and generates
           a personalised empathetic check-in referencing it
         - cold-start path: no memories available → warm generic invitation to share
+          (Task 6.2: guaranteed fallback — never returns None)
         """
         self.create_memory()
         self._reload_user()
@@ -206,7 +212,14 @@ class AffectiveHeuristic(BaseHeuristic):
             ))
             content = best.get("content", "")
             score   = best.get("affective_score", 1)
-            system  = self.message_prompt.replace("{language}", self._target_lang)
+
+            # Task 6.7: record which memory drove this message
+            self.memory_content = content[:120]
+            self.used_fallback  = False
+
+            system = self._safe_message_prompt(
+                self.message_prompt.replace("{language}", self._target_lang)
+            )
             user_content = (
                 f"USER NAME: {self.name}\n"
                 f"EMOTIONAL MEMORY: {content}\n"
@@ -230,38 +243,41 @@ class AffectiveHeuristic(BaseHeuristic):
                 print(f"⚠️  AffectiveHeuristic mark-used ({self.username}): {e}")
             finally:
                 self.mongodb_client.disconnect()
+
+            try:
+                text = self.llm_service.call_with_prompt(
+                    system=system,
+                    user_content=user_content,
+                    temperature=0.7,
+                    max_tokens=80,
+                )
+                if text and len(text) >= 2 and text[0] in ('"', "'") and text[0] == text[-1]:
+                    text = text[1:-1].strip()
+                if not text:
+                    raise ValueError("empty LLM response")
+                return text
+            except Exception as e:
+                print(f"⚠️  AffectiveHeuristic message LLM ({self.username}): {e}")
+                return f"Hi {self.name}, I was thinking about what you shared. How are you feeling about it now?"
         else:
-            # Cold start: no unused memories → generic warm invitation
-            system = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
-            user_content = (
+            # Cold start: no unused memories — Task 6.2: guaranteed fallback
+            # Task 6.7: mark as fallback path
+            self.memory_content = ""
+            self.used_fallback  = True
+
+            print(f"💛 [{self.username}] Affective cold-start — no unused memories")
+            prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            uc = (
                 f"USER NAME: {self.name}\n\n"
                 "Generate a gentle emotional invitation letting them know you are "
                 "here as a listening ear today."
             )
-
-        try:
-            text = self.llm_service.call_with_prompt(
-                system=system,
-                user_content=user_content,
-                temperature=0.7,
-                max_tokens=80,
-            )
-            if text and len(text) >= 2 and text[0] in ('"', "'") and text[0] == text[-1]:
-                text = text[1:-1].strip()
-            if not text:
-                raise ValueError("empty LLM response")
-            return text
-        except Exception as e:
-            print(f"⚠️  AffectiveHeuristic message LLM ({self.username}): {e}")
-            return (
-                f"Hi {self.name}, I was thinking about what you shared. "
-                "How are you feeling about it now?"
-                if has_context else
-                f"Hi {self.name}, just checking in — I'm here if you need a listening ear."
+            return self._cold_start_message(
+                prompt=prompt,
+                static_fallback=f"Hi {self.name}, just checking in — I'm here if you need a listening ear.",
+                user_content=uc,
             )
 
     # No clear_after_send() override needed: the emotional memory is already
     # marked used the moment it is selected in get_proactive_message(), so
     # there is nothing left to clean up after a successful send.
-
-

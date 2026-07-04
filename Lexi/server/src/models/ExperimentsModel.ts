@@ -58,13 +58,17 @@ export const experimentsSchema = new Schema<IExperiment>(
                 schedule: {
                     allowedDays:   { type: [Number], default: [0, 1, 2, 3, 4, 5, 6] }, // 0=Sun .. 6=Sat
                     mode:          { type: String, default: 'exact' }, // 'exact' | 'random'
-                    fireTimes:     { type: [String], default: ['13:45', '17:30', '21:15'] }, // up to 3 "HH:MM", used when mode='exact'
+                    fireTimes:     { type: [String], default: ['13:45', '17:30', '21:15'] }, // "HH:MM" strings, unlimited, used when mode='exact'
                     randomWindows: {
-                        type: [{ start: { type: String }, end: { type: String } }],
-                        default: [{ start: '12:00', end: '14:00' }],
-                    }, // used when mode='random'
+                        type: [{ start: { type: String }, end: { type: String }, count: { type: Number, default: 1 } }],
+                        default: [{ start: '12:00', end: '14:00', count: 1 }],
+                    }, // used when mode='random'; count = how many notifications to fire within the window
                 },
                 llmModel: { type: String, default: 'gpt-4o' },
+                // Task 6.3: experiment-level fallback language for users without a stored preference
+                defaultLanguage: { type: String, default: 'he' },
+                // Task 6.8: researcher-controlled per-user daily notification cap
+                maxDailyNotifications: { type: Number, default: 3 },
             }
         },
     },

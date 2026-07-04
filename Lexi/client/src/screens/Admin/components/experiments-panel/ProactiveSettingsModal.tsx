@@ -48,7 +48,7 @@ const DEFAULT_SCHEDULE: ScheduleSettings = {
     allowedDays: [0, 1, 2, 3, 4, 5, 6],
     mode: 'exact',
     fireTimes: ['13:45', '17:30', '21:15'],
-    randomWindows: [{ start: '12:00', end: '14:00' }],
+    randomWindows: [{ start: '12:00', end: '14:00', count: 1 }],
 };
 
 // ── Heuristic metadata ─────────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             '  "affective_score": integer 1–10 (1=mild, 10=deeply personal)\n' +
             '  "timestamp_iso": today\'s ISO datetime\n' +
             '  "used": false\n\n' +
-            'Return ONLY valid JSON: {"emotional_memories": [...]}\n' +
+            'Schema: {"emotional_memories": [{content, affective_score, timestamp_iso, used}]}\n' +
             'Return {"emotional_memories": []} if no genuine emotional content is present.',
         defaultMessagePrompt:
             'You are an empathetic assistant that encourages emotional sharing.\n' +
@@ -85,7 +85,7 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             'that directly references the specific emotional memory the user shared.\n' +
             'Acknowledge their feelings without being dramatic or clinical.\n' +
             'Invite them to share how they are feeling about it now.\n' +
-            'Return ONLY the final message, no quotes or explanations.',
+            'You MAY use the user\'s name once if it feels natural.',
     },
     temporal: {
         label: 'Temporal',
@@ -99,14 +99,14 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             '  "text": concise description (e.g. "job interview", "doctor appointment")\n' +
             '  "when_iso": ISO 8601 datetime string if timing is mentioned, or null if unclear\n\n' +
             'Today is {today_iso}. Resolve all relative dates against today.\n' +
-            'Return ONLY valid JSON: {"future_mentions": [...]}\n' +
+            'Schema: {"future_mentions": [{text, when_iso}]}\n' +
             'Return {"future_mentions": []} if no future events are mentioned.',
         defaultMessagePrompt:
             'You are a friendly assistant. Generate a warm, timely message in {language} (max 15 words) ' +
             'about the user\'s upcoming event or plan.\n' +
             'If the event is still ahead: ask if they are ready or excited.\n' +
             'If the event just passed: ask how it went.\n' +
-            'Return ONLY the final message, no quotes or explanations.',
+            'Never confuse past and future timing. You MAY use the user\'s name once.',
     },
     behaviouralGap: {
         label: 'Behavioural Gap',
@@ -118,14 +118,14 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             'You analyze conversation messages for EXPLICIT, concrete plans or commitments the user expressed.\n\n' +
             'Valid examples: "I\'ll go to the gym tomorrow", "I\'m starting that course next week"\n' +
             'Invalid (too vague): "I want to be healthier", "Maybe I\'ll try that someday"\n\n' +
-            'Return JSON: {"intents": [{"intent": "concise English description"}]}\n' +
+            'Schema: {"intents": [{"intent": "concise English description"}]}\n' +
             'Return {"intents": []} if no clear commitments are found.',
         defaultMessagePrompt:
             'You are a supportive, caring assistant.\n' +
             'Generate a gentle, friendly follow-up message in {language} (max 15 words) ' +
             'asking whether the user followed through on their stated plan.\n' +
             'Do NOT assume success or failure — stay curious and supportive.\n' +
-            'Return ONLY the final message, no quotes or explanations.',
+            'You MAY use the user\'s name once.',
     },
     generic: {
         label: 'Generic',
@@ -137,8 +137,7 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
         defaultMessagePrompt:
             'You are a standard assistant. Generate a completely neutral, friendly invitation to chat in {language} ' +
             '(max 15 words) with zero emotional weight and no specific topics. ' +
-            'You MAY use the user\'s name once if it feels natural. ' +
-            'Return ONLY the final message, no quotes or explanations.',
+            'You MAY use the user\'s name once if it feels natural.',
     },
 };
 
@@ -199,12 +198,13 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     experiment,
     onUpdate,
 }) => {
-    const [proactiveEnabled, setProactiveEnabled] = useState(false);
-    const [frequency,        setFrequency]        = useState(30);
-    const [llmModel,         setLlmModel]         = useState('gpt-4o');
-    const [configs,          setConfigs]          = useState<HeuristicConfigs>(buildDefaultConfigs);
-    const [schedule,         setSchedule]         = useState<ScheduleSettings>(DEFAULT_SCHEDULE);
-    const [isLoading,        setIsLoading]        = useState(false);
+    const [proactiveEnabled,      setProactiveEnabled]      = useState(false);
+    const [frequency,             setFrequency]             = useState(30);
+    const [llmModel,              setLlmModel]              = useState('gpt-4o');
+    const [configs,               setConfigs]               = useState<HeuristicConfigs>(buildDefaultConfigs);
+    const [schedule,              setSchedule]              = useState<ScheduleSettings>(DEFAULT_SCHEDULE);
+    const [maxDailyNotifications, setMaxDailyNotifications] = useState(3);
+    const [isLoading,             setIsLoading]             = useState(false);
 
     const serverBase = process.env.REACT_APP_API_URL || 'https://lexi-server-1rx9.onrender.com';
     const deepLink   = `${serverBase}/join/${experiment._id}`;
@@ -217,6 +217,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             setProactiveEnabled(ps.enabled);
             setFrequency(ps.frequency ?? 30);
             setLlmModel(ps.llmModel ?? 'gpt-4o');
+            setMaxDailyNotifications(ps.maxDailyNotifications ?? 3);
             setConfigs(initConfigs(ps.heuristicWeights, ps.heuristicPrompts));
             setSchedule({
                 allowedDays:   ps.schedule?.allowedDays?.length   ? ps.schedule.allowedDays   : DEFAULT_SCHEDULE.allowedDays,
@@ -228,6 +229,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             setProactiveEnabled(false);
             setFrequency(30);
             setLlmModel('gpt-4o');
+            setMaxDailyNotifications(3);
             setConfigs(buildDefaultConfigs());
             setSchedule(DEFAULT_SCHEDULE);
         }
@@ -302,9 +304,8 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     };
 
     const addFireTime = () => {
-        setSchedule(prev =>
-            prev.fireTimes.length >= 3 ? prev : { ...prev, fireTimes: [...prev.fireTimes, '12:00'] },
-        );
+        // Task 6.4: no cap on fire times
+        setSchedule(prev => ({ ...prev, fireTimes: [...prev.fireTimes, '12:00'] }));
     };
 
     const removeFireTime = (index: number) => {
@@ -314,9 +315,12 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
         }));
     };
 
-    const setRandomWindow = (field: 'start' | 'end', value: string) => {
+    // Task 6.4: extend to support count mutations alongside start/end
+    const setRandomWindow = (field: 'start' | 'end' | 'count', value: string | number) => {
         setSchedule(prev => {
-            const windows = prev.randomWindows.length ? [...prev.randomWindows] : [{ start: '12:00', end: '14:00' }];
+            const windows = prev.randomWindows.length
+                ? [...prev.randomWindows]
+                : [{ start: '12:00', end: '14:00', count: 1 }];
             windows[0] = { ...windows[0], [field]: value };
             return { ...prev, randomWindows: windows };
         });
@@ -371,13 +375,14 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                     userAnnotation: experiment.experimentFeatures?.userAnnotation || false,
                     streamMessage:  experiment.experimentFeatures?.streamMessage  || false,
                     proactiveSettings: {
-                        enabled:          proactiveEnabled,
+                        enabled:               proactiveEnabled,
                         frequency,
-                        heuristics:       experiment.experimentFeatures?.proactiveSettings?.heuristics, // keep legacy
+                        heuristics:            experiment.experimentFeatures?.proactiveSettings?.heuristics, // keep legacy
                         heuristicWeights,
                         heuristicPrompts,
                         schedule,
                         llmModel,
+                        maxDailyNotifications, // Task 6.8
                     },
                 },
             };
@@ -496,14 +501,14 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                 <Button
                                     size="small"
                                     onClick={addFireTime}
-                                    disabled={!proactiveEnabled || schedule.fireTimes.length >= 3}
+                                    disabled={!proactiveEnabled}
                                     sx={{ alignSelf: 'flex-start', textTransform: 'none' }}
                                 >
-                                    + Add time (up to 3)
+                                    + Add time
                                 </Button>
                             </Box>
                         ) : (
-                            <Box display="flex" alignItems="center" gap={1}>
+                            <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
                                 <TextField
                                     type="time"
                                     label="Window start"
@@ -525,18 +530,53 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                     InputLabelProps={{ shrink: true }}
                                     sx={{ width: 160 }}
                                 />
+                                <TextField
+                                    type="number"
+                                    label="Notifications in window"
+                                    value={schedule.randomWindows[0]?.count ?? 1}
+                                    onChange={e => setRandomWindow('count', Math.max(1, Math.min(20, Number(e.target.value))))}
+                                    size="small"
+                                    disabled={!proactiveEnabled}
+                                    inputProps={{ min: 1, max: 20 }}
+                                    sx={{ width: 180 }}
+                                />
                             </Box>
                         )}
                         <Typography variant="caption" color="textSecondary" sx={{ mt: 1, display: 'block' }}>
                             {schedule.mode === 'exact'
                                 ? 'The system fires a cycle at each exact time above, on the allowed days only.'
-                                : 'The system fires once at a random minute within this window, on the allowed days only.'}
+                                : 'The system fires the specified number of notifications at random minutes within this window, on the allowed days only.'}
+                        </Typography>
+                        {/* Task 6.4: timezone display */}
+                        <Typography variant="caption" sx={{ mt: 0.5, display: 'block', color: 'text.secondary', fontStyle: 'italic' }}>
+                            🕐 Timezone: <strong>Asia/Jerusalem</strong> (Israel Standard Time / Israel Daylight Time).
+                            All times above are interpreted in this timezone.
                         </Typography>
                         {!isScheduleValid && (
                             <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
                                 Select at least one allowed day and at least one time.
                             </Typography>
                         )}
+                    </Box>
+
+                    {/* Task 6.8: per-user daily notification cap */}
+                    <Box>
+                        <Typography variant="body1" fontWeight={500} gutterBottom>
+                            Daily Notification Limit
+                        </Typography>
+                        <TextField
+                            type="number"
+                            label="Max notifications per user per day"
+                            value={maxDailyNotifications}
+                            onChange={e => setMaxDailyNotifications(Math.max(1, Number(e.target.value)))}
+                            size="small"
+                            disabled={!proactiveEnabled}
+                            inputProps={{ min: 1 }}
+                            sx={{ width: 280 }}
+                        />
+                        <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
+                            Each user will receive at most this many proactive notifications per calendar day.
+                        </Typography>
                     </Box>
 
                     <Divider />
@@ -657,7 +697,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                                                 size="small"
                                                                 value={cfg.memoryPrompt}
                                                                 onChange={e => setPrompt(key, 'memoryPrompt', e.target.value)}
-                                                                helperText="Instructs the LLM on what to extract from conversations (create_memory phase)."
+                                                                helperText="Write the persona and task instructions only (what to extract from conversations). Formatting and JSON output constraints are automatically added by the system — do not include 'Return ONLY valid JSON' or schema rules here."
                                                             />
                                                         )}
                                                         <TextField
@@ -668,7 +708,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                                             size="small"
                                                             value={cfg.messagePrompt}
                                                             onChange={e => setPrompt(key, 'messagePrompt', e.target.value)}
-                                                            helperText="Instructs the LLM on what kind of proactive message to generate (get_proactive_message phase). Use {language} as a placeholder for the user's language."
+                                                            helperText="Write the persona and tone instructions only. Use {language} as a placeholder for the user's language. Output constraints are automatically added by the system — do not include 'Return ONLY the final message' rules here."
                                                         />
                                                         <Button
                                                             size="small"

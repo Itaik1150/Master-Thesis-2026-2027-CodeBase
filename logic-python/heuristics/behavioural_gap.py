@@ -8,10 +8,20 @@ BehaviouralGapHeuristic.create_memory() scans for new stated intents and
 checks existing ones for completion; get_proactive_message() generates the
 follow-up message if a gap is currently pending.
 
+If no pending gap exists this cycle, a warm cold-start invitation is generated
+instead (Task 6.2: guaranteed fallback — never returns None).
+
 MongoDB fields used (inside proactiveMemory):
-  open_intents: List[{intent, stated_at, checked}]
-  pending_gap_followup: {intent_text, stated_at}
-  last_intent_scan_conversation_id: str  — prevents re-scanning the same conversation
+  open_intents:                  List[{intent, stated_at, checked}]
+  pending_gap_followup:          {intent_text, stated_at}
+  gap_scanned_conversation_ids:  List[str]  — IDs of conversations already scanned
+                                             for intents (Task 6.6: replaces the old
+                                             single-cursor last_intent_scan_conversation_id)
+
+Task 6.6 note: gap_scanned_conversation_ids is PRIVATE to BehaviouralGapHeuristic.
+  No other heuristic must read or write this field. The set-based approach ensures
+  all recent conversations are eventually scanned while allowing other heuristics
+  (Affective, Temporal) to independently process the same conversations.
 """
 
 from __future__ import annotations
@@ -25,16 +35,14 @@ from bson import ObjectId as _ObjectId
 from heuristics.base_heuristic import BaseHeuristic
 
 
-# Hours after stating an intent before we check for completion.
-GAP_MIN_HOURS: float = 24   # don't check if intent is less than 24h old
-GAP_MAX_HOURS: float = 48   # stop checking after 48h (too stale to be useful)
+GAP_MIN_HOURS: float = 24
+GAP_MAX_HOURS: float = 48
 
 
 def clear_followup(user_id: str, mongodb_client) -> None:
     """
     Remove pending_gap_followup after a nudge is successfully sent.
     Uses $unset so no other proactiveMemory fields are touched.
-    Opens and closes its own MongoDB connection.
     """
     from bson import ObjectId
 
@@ -58,12 +66,10 @@ class BehaviouralGapHeuristic(BaseHeuristic):
     Detects when a user stated an explicit intention but has not followed up.
     Generates a gentle follow-up asking if they went through with it.
 
-    Memory fields (inside proactiveMemory):
-      open_intents:                     List[{intent, stated_at, checked}]
-      pending_gap_followup:             {intent_text, stated_at}
-      last_intent_scan_conversation_id: str — prevents rescanning the same conversation
-
-    Returns None from get_proactive_message() when no gap is detected this cycle.
+    Task 6.6: Uses gap_scanned_conversation_ids (set) instead of a single
+    last_intent_scan_conversation_id cursor. This ensures all recent unscanned
+    conversations are processed, and other heuristics can still process any
+    conversation that BehaviouralGap has already scanned.
     """
 
     DEFAULT_MEMORY_PROMPT = (
@@ -77,8 +83,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
         "  - 'I want to be healthier'\n"
         "  - 'Maybe I'll try that someday'\n"
         "  - 'I should exercise more'\n\n"
-        "Return JSON with a single key 'intents': a list of objects, each with "
-        "key 'intent' (concise English description, e.g. 'go to the gym'). "
+        "Schema: {\"intents\": [{\"intent\": \"concise English description\"}]}\n"
         'Return {"intents": []} if no clear commitments are found.'
     )
 
@@ -87,79 +92,83 @@ class BehaviouralGapHeuristic(BaseHeuristic):
         "Generate a gentle, friendly follow-up message in {language} (max 15 words) "
         "asking whether the user followed through on their stated plan.\n"
         "Do NOT assume success or failure — stay curious and supportive.\n"
-        "You MAY use the user's name once. "
-        "Return ONLY the final message, no quotes or explanations."
+        "You MAY use the user's name once."
+    )
+
+    _COLD_START_PROMPT = (
+        "You are a supportive, encouraging assistant.\n"
+        "Generate a warm, friendly check-in message in {language} (max 15 words) "
+        "asking the user if they have been working towards any of their goals lately.\n"
+        "Use the user's name naturally."
     )
 
     def create_memory(self) -> None:
         """
-        Scan for new stated intents and check existing ones for completion.
-        Equivalent to the module-level scan_for_gaps() but class-based, and using
-        self.memory_prompt for intent extraction instead of the hardcoded prompt.
+        Task 6.6: Scan recent conversations NOT YET in gap_scanned_conversation_ids,
+        extract intents from each, then add their IDs to the set ($addToSet — idempotent).
+        This replaces the single-cursor last_intent_scan_conversation_id approach.
         """
         memory = self._memory
-        last_scanned: str = memory.get("last_intent_scan_conversation_id", "")
+        scanned_ids: set = set(memory.get("gap_scanned_conversation_ids") or [])
         existing_intents: List[dict] = list(memory.get("open_intents") or [])
 
         # ── Phase A: Read ──────────────────────────────────────────────────────
-        new_conv_messages:    List[str] = []
+        recent_metas: List[dict] = []
+        conv_messages_by_id: dict = {}  # conv_id → [message strings]
         recent_user_messages: List[str] = []
-        last_scanned_to_save: str       = last_scanned
 
         try:
             if not self.mongodb_client.connect():
                 return
-
-            latest_meta = self.mongodb_client.db["metadata_conversations"].find_one(
-                {"userId": self.user_id},
-                sort=[("createdAt", -1)],
-            )
-            if latest_meta:
-                conv_id = str(latest_meta["_id"])
-                if conv_id != last_scanned:
-                    raw = list(self.mongodb_client.db["conversations"].find(
-                        {"conversationId": conv_id, "role": "user"},
-                        sort=[("messageNumber", 1)],
-                    ))
-                    new_conv_messages    = [m.get("content", "") for m in raw if m.get("content")]
-                    last_scanned_to_save = conv_id
-                    if new_conv_messages:
-                        print(f"   🔍 gap: scanning conv {conv_id[:8]}... "
-                              f"({len(new_conv_messages)} msgs)")
 
             recent_metas = list(self.mongodb_client.db["metadata_conversations"].find(
                 {"userId": self.user_id},
                 sort=[("createdAt", -1)],
                 limit=3,
             ))
+
             for meta in recent_metas:
+                conv_id = str(meta["_id"])
                 raw = list(self.mongodb_client.db["conversations"].find(
-                    {"conversationId": str(meta["_id"]), "role": "user"},
+                    {"conversationId": conv_id, "role": "user"},
                     sort=[("messageNumber", 1)],
                 ))
-                recent_user_messages.extend(
-                    [m.get("content", "") for m in raw if m.get("content")]
-                )
+                msgs = [m.get("content", "") for m in raw if m.get("content")]
+                conv_messages_by_id[conv_id] = msgs
+                recent_user_messages.extend(msgs)
+
         except Exception as e:
             print(f"⚠️  BehaviouralGapHeuristic.create_memory read ({self.username}): {e}")
             return
         finally:
             self.mongodb_client.disconnect()
 
-        # ── Phase B-1: LLM intent extraction ──────────────────────────────────
+        # Conversations not yet scanned for intents
+        new_conv_ids = [
+            str(m["_id"]) for m in recent_metas
+            if str(m["_id"]) not in scanned_ids
+        ]
+
+        # ── Phase B-1: LLM intent extraction for new conversations ────────────
         new_intents: List[dict] = []
-        if new_conv_messages:
+        newly_scanned_ids: List[str] = []
+
+        for conv_id in new_conv_ids:
+            msgs = conv_messages_by_id.get(conv_id, [])
+            if not msgs:
+                newly_scanned_ids.append(conv_id)
+                continue
             try:
-                joined = "\n".join(f"- {m}" for m in new_conv_messages[-30:] if m)
+                joined = "\n".join(f"- {m}" for m in msgs[-30:] if m)
                 raw_text = self.llm_service.call_with_prompt(
-                    system=self.memory_prompt,
+                    system=self._safe_memory_prompt(self.memory_prompt),
                     user_content=f"Participant messages:\n{joined}",
                     json_mode=True,
                     max_tokens=300,
                 )
                 parsed = json.loads(raw_text)
                 intents_raw = parsed.get("intents") or []
-                existing_texts = {i.get("intent", "").lower() for i in existing_intents}
+                existing_texts = {i.get("intent", "").lower() for i in existing_intents + new_intents}
                 now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
                 for item in intents_raw:
                     text = (item.get("intent") or "").strip()
@@ -168,8 +177,13 @@ class BehaviouralGapHeuristic(BaseHeuristic):
                             {"intent": text, "stated_at": now_iso, "checked": False}
                         )
                         existing_texts.add(text.lower())
+                newly_scanned_ids.append(conv_id)
+                if intents_raw:
+                    print(f"   🔍 gap: scanned conv {conv_id[:8]}... "
+                          f"({len(msgs)} msgs, {len(intents_raw)} intent(s) found)")
             except Exception as e:
                 print(f"⚠️  BehaviouralGapHeuristic intent extraction ({self.username}): {e}")
+                newly_scanned_ids.append(conv_id)  # mark as scanned to avoid retry loops
 
         # ── Phase B-2: Check completion for intents in the 24–48h window ──────
         all_intents              = existing_intents + new_intents
@@ -195,14 +209,12 @@ class BehaviouralGapHeuristic(BaseHeuristic):
             hours_ago = (now - stated_at).total_seconds() / 3600.0
 
             if hours_ago < GAP_MIN_HOURS:
-                continue                          # too recent — wait
+                continue
             if hours_ago > GAP_MAX_HOURS:
-                indices_to_mark.append(idx)       # expired — archive silently
+                indices_to_mark.append(idx)
                 continue
 
-            # Intent is in the 24–48h window: check for completion
             if not recent_user_messages:
-                # No follow-up messages available — fire the nudge
                 pending_gap = {
                     "intent_text": intent["intent"],
                     "stated_at":   intent["stated_at"],
@@ -221,7 +233,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
                         "intent_text": intent["intent"],
                         "stated_at":   intent["stated_at"],
                     }
-                    break  # Only one gap nudge per user per cycle
+                    break
             except Exception as e:
                 print(f"⚠️  BehaviouralGapHeuristic completion check ({self.username}): {e}")
 
@@ -230,7 +242,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
             not new_intents
             and pending_gap is None
             and not indices_to_mark
-            and last_scanned_to_save == last_scanned
+            and not newly_scanned_ids
         )
         if nothing_changed:
             return
@@ -244,10 +256,16 @@ class BehaviouralGapHeuristic(BaseHeuristic):
                 return
             update: dict = {
                 "$set": {
-                    "proactiveMemory.open_intents":                     all_intents,
-                    "proactiveMemory.last_intent_scan_conversation_id": last_scanned_to_save,
+                    "proactiveMemory.open_intents": all_intents,
                 }
             }
+            if newly_scanned_ids:
+                # $addToSet is idempotent — safe to call even if some IDs already exist
+                update["$addToSet"] = {
+                    "proactiveMemory.gap_scanned_conversation_ids": {
+                        "$each": newly_scanned_ids
+                    }
+                }
             if pending_gap:
                 update["$set"]["proactiveMemory.pending_gap_followup"] = pending_gap
                 print(f"🔍 Gap followup queued for {self.user_id}: "
@@ -262,20 +280,45 @@ class BehaviouralGapHeuristic(BaseHeuristic):
 
     def get_proactive_message(self) -> Optional[str]:
         """
-        Returns a message if a pending gap followup exists, otherwise None.
+        Returns a message if a pending gap followup exists.
+        Task 6.2: if no pending gap, generates a warm cold-start invitation instead
+        of returning None (guaranteed fallback).
         """
         self.create_memory()
         self._reload_user()
 
         followup = self._memory.get("pending_gap_followup")
         if not followup or not isinstance(followup, dict):
-            return None
+            # Task 6.2: cold-start — no pending gap this cycle
+            # Task 6.7: mark as fallback path
+            print(f"🔍 [{self.username}] Gap cold-start — no pending followup")
+            self.used_fallback  = True
+            self.memory_content = ""
+            prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            return self._cold_start_message(
+                prompt=prompt,
+                static_fallback=f"Hi {self.name}, how have you been doing with your plans lately?",
+            )
 
         intent_text = (followup.get("intent_text") or "").strip()
         if not intent_text:
-            return None
+            # Edge case: followup exists but has no content — fallback
+            print(f"🔍 [{self.username}] Gap cold-start — followup has no intent text")
+            self.used_fallback  = True
+            self.memory_content = ""
+            prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            return self._cold_start_message(
+                prompt=prompt,
+                static_fallback=f"Hi {self.name}, how have you been doing with your plans lately?",
+            )
 
-        system = self.message_prompt.replace("{language}", self._target_lang)
+        # Task 6.7: record which intent drove this message
+        self.memory_content = intent_text[:120]
+        self.used_fallback  = False
+
+        system = self._safe_message_prompt(
+            self.message_prompt.replace("{language}", self._target_lang)
+        )
         user_content = (
             f"USER NAME: {self.name}\n"
             f"STATED PLAN: {intent_text}\n\n"

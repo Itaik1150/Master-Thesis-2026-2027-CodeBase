@@ -32,7 +32,7 @@ export const userSchema = new Schema<IUser>(
         proactiveGroup: { 
             type: String, 
             enum: ['affective', 'generic', 'reactive'],
-            required: true,
+            required: false,
         },
         fcmToken: { type: String },
         fcmTokenUpdatedAt: { type: Date },

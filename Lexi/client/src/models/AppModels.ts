@@ -147,17 +147,18 @@ export interface HeuristicPrompts {
     generic?:        HeuristicPromptPair;
 }
 
-/** A single "HH:MM"–"HH:MM" random-fire window. */
+/** A single "HH:MM"–"HH:MM" random-fire window with an optional count of notifications. */
 export interface RandomWindow {
     start: string;
     end:   string;
+    count: number; // Task 6.4: how many notifications to fire within this window (default 1)
 }
 
 /** Notification schedule: which days are allowed and when to fire each day. */
 export interface ScheduleSettings {
     allowedDays:   number[];       // 0=Sun .. 6=Sat
     mode:          'exact' | 'random';
-    fireTimes:     string[];       // 1–3 "HH:MM", used when mode === 'exact'
+    fireTimes:     string[];       // unlimited "HH:MM" strings, used when mode === 'exact'
     randomWindows: RandomWindow[]; // used when mode === 'random'
 }
 
@@ -167,11 +168,13 @@ export interface ExperimentFeatures {
     proactiveSettings?: {
         enabled: boolean;
         frequency: number;
-        heuristics?:       ProactiveHeuristicsSettings; // legacy boolean flags (backward compat)
-        heuristicWeights?: HeuristicWeights;            // Task 3.1 — probability-based selection
-        heuristicPrompts?: HeuristicPrompts;            // Task 4.2 — per-heuristic prompt editor
-        schedule?:         ScheduleSettings;            // Task 4.3 — days & hours scheduling
-        llmModel?: string;
+        heuristics?:           ProactiveHeuristicsSettings; // legacy boolean flags (backward compat)
+        heuristicWeights?:     HeuristicWeights;            // Task 3.1 — probability-based selection
+        heuristicPrompts?:     HeuristicPrompts;            // Task 4.2 — per-heuristic prompt editor
+        schedule?:             ScheduleSettings;            // Task 4.3 — days & hours scheduling
+        llmModel?:             string;
+        defaultLanguage?:      string;                      // Task 6.3 — experiment-level language fallback
+        maxDailyNotifications?: number;                     // Task 6.8 — per-user daily notification cap
     };
 }
 
