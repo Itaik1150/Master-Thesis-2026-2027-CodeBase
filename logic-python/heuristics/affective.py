@@ -48,16 +48,16 @@ class AffectiveHeuristic(BaseHeuristic):
         "You analyze conversation messages for deep emotional content.\n"
         "Extract emotional expressions, personal struggles, vulnerable shares, "
         "and meaningful life events shared by the user.\n\n"
-        "For each genuine emotional share, produce an object with:\n"
-        '  "content":        exact quote or close paraphrase of the emotional share\n'
-        '  "affective_score": integer 1–10 (1=mildly emotional, 10=deeply personal/distressing)\n'
-        '  "timestamp_iso":  use today\'s ISO datetime for all items\n'
-        '  "used":           false\n\n'
         "Exclude casual mentions, surface-level topics, or purely factual statements."
     )
 
     # Task 6.5: structural part — injected by _safe_memory_prompt(), never shown in UI.
     MEMORY_SCHEMA: str = (
+        "For each genuine emotional share, produce an object with:\n"
+        '  "content":        exact quote or close paraphrase of the emotional share\n'
+        '  "affective_score": integer 1\u201310 (1=mildly emotional, 10=deeply personal/distressing)\n'
+        '  "timestamp_iso":  use today\'s ISO datetime for all items\n'
+        '  "used":           false\n\n'
         'Schema: {"emotional_memories": [{"content": str, "affective_score": int 1\u201310, '
         '"timestamp_iso": str, "used": false}]}\n'
         'Return {"emotional_memories": []} if no genuine emotional content is present.'

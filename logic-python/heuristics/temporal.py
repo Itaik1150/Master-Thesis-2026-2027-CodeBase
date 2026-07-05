@@ -50,14 +50,14 @@ class TemporalHeuristic(BaseHeuristic):
     DEFAULT_MEMORY_PROMPT = (
         "You analyze conversation messages for mentions of upcoming events, "
         "plans, appointments, or activities.\n\n"
-        "For each future event found, extract:\n"
-        '  "text":     concise description (e.g. "job interview", "doctor appointment")\n'
-        '  "when_iso": ISO 8601 datetime string if timing is mentioned, or null if unclear\n\n'
         "Today is {today_iso}. Resolve all relative dates against today."
     )
 
     # Task 6.5: structural part — injected by _safe_memory_prompt(), never shown in UI.
     MEMORY_SCHEMA: str = (
+        "For each future event found, extract:\n"
+        '  "text":     concise description (e.g. "job interview", "doctor appointment")\n'
+        '  "when_iso": ISO 8601 datetime string if timing is mentioned, or null if unclear\n\n'
         'Schema: {"future_mentions": [{"text": str, "when_iso": str or null}]}\n'
         'Return {"future_mentions": []} if no future events are mentioned.'
     )

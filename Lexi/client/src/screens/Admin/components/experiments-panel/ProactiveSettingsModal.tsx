@@ -73,11 +73,6 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             'You analyze conversation messages for deep emotional content.\n' +
             'Extract emotional expressions, personal struggles, vulnerable shares, ' +
             'and meaningful life events shared by the user.\n\n' +
-            'For each genuine emotional share, produce an object with:\n' +
-            '  "content":        exact quote or close paraphrase of the emotional share\n' +
-            '  "affective_score": integer 1\u201310 (1=mildly emotional, 10=deeply personal/distressing)\n' +
-            '  "timestamp_iso":  use today\'s ISO datetime for all items\n' +
-            '  "used":           false\n\n' +
             'Exclude casual mentions, surface-level topics, or purely factual statements.',
         defaultMessagePrompt:
             'You are an empathetic assistant that encourages emotional sharing.\n' +
@@ -96,9 +91,6 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
         defaultMemoryPrompt:
             'You analyze conversation messages for mentions of upcoming events, ' +
             'plans, appointments, or activities.\n\n' +
-            'For each future event found, extract:\n' +
-            '  "text":     concise description (e.g. "job interview", "doctor appointment")\n' +
-            '  "when_iso": ISO 8601 datetime string if timing is mentioned, or null if unclear\n\n' +
             'Today is {today_iso}. Resolve all relative dates against today.',
         defaultMessagePrompt:
             'You are a friendly assistant. Generate a warm, timely message in {language} ' +
