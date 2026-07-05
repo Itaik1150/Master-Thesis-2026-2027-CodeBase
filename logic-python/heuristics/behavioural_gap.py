@@ -35,32 +35,6 @@ from bson import ObjectId as _ObjectId
 from heuristics.base_heuristic import BaseHeuristic
 
 
-GAP_MIN_HOURS: float = 24
-GAP_MAX_HOURS: float = 48
-
-
-def clear_followup(user_id: str, mongodb_client) -> None:
-    """
-    Remove pending_gap_followup after a nudge is successfully sent.
-    Uses $unset so no other proactiveMemory fields are touched.
-    """
-    from bson import ObjectId
-
-    try:
-        if not mongodb_client.connect():
-            print(f"⚠️  gap.clear_followup: could not connect for {user_id}")
-            return
-        mongodb_client.db[mongodb_client.users_collection].update_one(
-            {"_id": ObjectId(user_id)},
-            {"$unset": {"proactiveMemory.pending_gap_followup": ""}},
-        )
-        print(f"🔍 Gap followup cleared for user {user_id}")
-    except Exception as e:
-        print(f"⚠️  gap.clear_followup error for {user_id}: {e}")
-    finally:
-        mongodb_client.disconnect()
-
-
 class BehaviouralGapHeuristic(BaseHeuristic):
     """
     Detects when a user stated an explicit intention but has not followed up.
@@ -72,6 +46,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
     conversation that BehaviouralGap has already scanned.
     """
 
+    # Task 6.5: researcher-facing prompt — persona/task only, no schema or output constraints.
     DEFAULT_MEMORY_PROMPT = (
         "You analyze conversation messages from a user.\n"
         "Extract only EXPLICIT, concrete plans or commitments the user expressed.\n\n"
@@ -82,8 +57,12 @@ class BehaviouralGapHeuristic(BaseHeuristic):
         "Invalid (too vague — do NOT include):\n"
         "  - 'I want to be healthier'\n"
         "  - 'Maybe I'll try that someday'\n"
-        "  - 'I should exercise more'\n\n"
-        "Schema: {\"intents\": [{\"intent\": \"concise English description\"}]}\n"
+        "  - 'I should exercise more'"
+    )
+
+    # Task 6.5: structural part — injected by _safe_memory_prompt(), never shown in UI.
+    MEMORY_SCHEMA: str = (
+        'Schema: {"intents": [{"intent": "concise English description"}]}\n'
         'Return {"intents": []} if no clear commitments are found.'
     )
 
@@ -102,6 +81,9 @@ class BehaviouralGapHeuristic(BaseHeuristic):
         "Use the user's name naturally."
     )
 
+    _GAP_MIN_HOURS: float = 24
+    _GAP_MAX_HOURS: float = 48
+
     def create_memory(self) -> None:
         """
         Task 6.6: Scan recent conversations NOT YET in gap_scanned_conversation_ids,
@@ -114,7 +96,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
 
         # ── Phase A: Read ──────────────────────────────────────────────────────
         recent_metas: List[dict] = []
-        conv_messages_by_id: dict = {}  # conv_id → [message strings]
+        conv_messages_by_id: dict = {}
         recent_user_messages: List[str] = []
 
         try:
@@ -143,11 +125,16 @@ class BehaviouralGapHeuristic(BaseHeuristic):
         finally:
             self.mongodb_client.disconnect()
 
-        # Conversations not yet scanned for intents
         new_conv_ids = [
             str(m["_id"]) for m in recent_metas
             if str(m["_id"]) not in scanned_ids
         ]
+
+        # Task 6.3: detect language from messages collected above (no extra DB call).
+        # Persisted in Phase C below; self.language updated for use in this cycle.
+        _detected_lang = self._detect_language(recent_user_messages)
+        if _detected_lang:
+            self.language = _detected_lang
 
         # ── Phase B-1: LLM intent extraction for new conversations ────────────
         new_intents: List[dict] = []
@@ -183,7 +170,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
                           f"({len(msgs)} msgs, {len(intents_raw)} intent(s) found)")
             except Exception as e:
                 print(f"⚠️  BehaviouralGapHeuristic intent extraction ({self.username}): {e}")
-                newly_scanned_ids.append(conv_id)  # mark as scanned to avoid retry loops
+                newly_scanned_ids.append(conv_id)
 
         # ── Phase B-2: Check completion for intents in the 24–48h window ──────
         all_intents              = existing_intents + new_intents
@@ -208,9 +195,9 @@ class BehaviouralGapHeuristic(BaseHeuristic):
 
             hours_ago = (now - stated_at).total_seconds() / 3600.0
 
-            if hours_ago < GAP_MIN_HOURS:
+            if hours_ago < self._GAP_MIN_HOURS:
                 continue
-            if hours_ago > GAP_MAX_HOURS:
+            if hours_ago > self._GAP_MAX_HOURS:
                 indices_to_mark.append(idx)
                 continue
 
@@ -243,6 +230,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
             and pending_gap is None
             and not indices_to_mark
             and not newly_scanned_ids
+            and not _detected_lang  # Task 6.3: language detection is also a write reason
         )
         if nothing_changed:
             return
@@ -259,8 +247,10 @@ class BehaviouralGapHeuristic(BaseHeuristic):
                     "proactiveMemory.open_intents": all_intents,
                 }
             }
+            # Task 6.3: persist detected language so future cycles cascade to level 1
+            if _detected_lang:
+                update["$set"]["proactiveMemory.preferred_language"] = _detected_lang
             if newly_scanned_ids:
-                # $addToSet is idempotent — safe to call even if some IDs already exist
                 update["$addToSet"] = {
                     "proactiveMemory.gap_scanned_conversation_ids": {
                         "$each": newly_scanned_ids
@@ -268,7 +258,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
                 }
             if pending_gap:
                 update["$set"]["proactiveMemory.pending_gap_followup"] = pending_gap
-                print(f"🔍 Gap followup queued for {self.user_id}: "
+                print(f"🔍 Gap followup queued for {self.username}: "
                       f"'{pending_gap['intent_text'][:50]}'")
             self.mongodb_client.db[self.mongodb_client.users_collection].update_one(
                 {"_id": _ObjectId(self.user_id)}, update
@@ -295,21 +285,28 @@ class BehaviouralGapHeuristic(BaseHeuristic):
             self.used_fallback  = True
             self.memory_content = ""
             prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            if self.language == "he":
+                fallback = f"היי {self.name}, איך מתקדם עם התוכניות שלך?"
+            else:
+                fallback = f"Hi {self.name}, how have you been doing with your plans lately?"
             return self._cold_start_message(
                 prompt=prompt,
-                static_fallback=f"Hi {self.name}, how have you been doing with your plans lately?",
+                static_fallback=fallback,
             )
 
         intent_text = (followup.get("intent_text") or "").strip()
         if not intent_text:
-            # Edge case: followup exists but has no content — fallback
             print(f"🔍 [{self.username}] Gap cold-start — followup has no intent text")
             self.used_fallback  = True
             self.memory_content = ""
             prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            if self.language == "he":
+                fallback = f"היי {self.name}, איך מתקדם עם התוכניות שלך?"
+            else:
+                fallback = f"Hi {self.name}, how have you been doing with your plans lately?"
             return self._cold_start_message(
                 prompt=prompt,
-                static_fallback=f"Hi {self.name}, how have you been doing with your plans lately?",
+                static_fallback=fallback,
             )
 
         # Task 6.7: record which intent drove this message
@@ -333,11 +330,26 @@ class BehaviouralGapHeuristic(BaseHeuristic):
             )
             if text and len(text) >= 2 and text[0] in ('"', "'") and text[0] == text[-1]:
                 text = text[1:-1].strip()
-            return text or f"Hi {self.name}, did you end up {intent_text}?"
+            if text:
+                return text
+            raise ValueError("empty LLM response")
         except Exception as e:
             print(f"⚠️  BehaviouralGapHeuristic message LLM ({self.username}): {e}")
+            if self.language == "he":
+                return f"היי {self.name}, האם בסוף {intent_text}?"
             return f"Hi {self.name}, did you end up {intent_text}?"
 
     def clear_after_send(self) -> None:
         """Remove pending_gap_followup after a successful send."""
-        clear_followup(self.user_id, self.mongodb_client)
+        try:
+            if not self.mongodb_client.connect():
+                return
+            self.mongodb_client.db[self.mongodb_client.users_collection].update_one(
+                {"_id": _ObjectId(self.user_id)},
+                {"$unset": {"proactiveMemory.pending_gap_followup": ""}},
+            )
+            print(f"🔍 [{self.username}] Gap followup cleared")
+        except Exception as e:
+            print(f"⚠️  BehaviouralGapHeuristic.clear_after_send ({self.username}): {e}")
+        finally:
+            self.mongodb_client.disconnect()

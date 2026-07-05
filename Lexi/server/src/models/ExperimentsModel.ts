@@ -67,8 +67,6 @@ export const experimentsSchema = new Schema<IExperiment>(
                 llmModel: { type: String, default: 'gpt-4o' },
                 // Task 6.3: experiment-level fallback language for users without a stored preference
                 defaultLanguage: { type: String, default: 'he' },
-                // Task 6.8: researcher-controlled per-user daily notification cap
-                maxDailyNotifications: { type: Number, default: 3 },
             }
         },
     },

@@ -390,6 +390,16 @@ user.proactiveMemory.preferred_language
         → BaseHeuristic.self.language → _target_lang → {language} in prompts
 ```
 
+**✅ Implemented.** The cascade above was already wired but `preferred_language` was never written, so
+new users always fell through to `"he"`. Fix adds automatic language detection from conversation messages:
+- `BaseHeuristic._detect_language(texts)` — character-ratio analysis (Hebrew Unicode >15% → `"he"`, else `"en"`), no LLM call, no extra DB connection.
+- `AffectiveHeuristic`, `TemporalHeuristic`, `BehaviouralGapHeuristic` each detect language from the messages they already collect in `create_memory()` and write `preferred_language` to MongoDB in their Phase C write (zero extra DB round-trips).
+- `TemporalHeuristic.create_memory()` was restructured so Phase C always runs when messages are available (not only when new temporal mentions are found), ensuring language is persisted even for users with no upcoming events.
+- `GenericHeuristic.create_memory()` now reads up to 2 recent conversations solely for language detection; `get_proactive_message()` calls `create_memory()` + `_reload_user()` so the detected language is applied before the prompt is built.
+- `BaseHeuristic._reload_user()` re-runs the language cascade after each reload so language written by `create_memory()` takes effect immediately in the same cycle (no cycle delay).
+- `BaseHeuristic._ensure_language_detected()` added as an on-demand fallback (available to any subclass that needs it).
+- All static fallback strings in every heuristic are now language-aware (`"he"` → Hebrew string, else English).
+
 ---
 
 #### 6.4 — Advanced Scheduling Flexibility
@@ -411,7 +421,7 @@ user.proactiveMemory.preferred_language
 
 ---
 
-#### 6.5 — Prompt Safety & Separation
+#### ✅ 6.5 — Prompt Safety & Separation
 
 **Goal:** Researchers write only the persona/task portion of prompts. All structural formatting instructions live exclusively in the backend.
 
@@ -428,6 +438,8 @@ user.proactiveMemory.preferred_language
 - `Lexi/client/src/screens/Admin/components/experiments-panel/ProactiveSettingsModal.tsx`:
   - Strip the structural `"Return ONLY..."` lines from `defaultMemoryPrompt` / `defaultMessagePrompt` in the `HEURISTICS` constant (so reset-to-defaults reflects the clean researcher-facing text).
   - Add helper text below Memory Prompt and Message Prompt `TextField`s: `"Write the persona and task instructions only. Formatting and output constraints are automatically added by the system."`
+
+**✅ Implemented.** Each heuristic now exposes a `MEMORY_SCHEMA` class attribute that holds the JSON schema definition and empty-return instruction. `BaseHeuristic._safe_memory_prompt()` injects `MEMORY_SCHEMA` between the researcher prompt and `STRUCTURAL_JSON_SUFFIX` before every LLM call, so the schema is always present without researchers having to include it. `DEFAULT_MEMORY_PROMPT` in all three memory-using heuristics (`affective`, `temporal`, `behavioural_gap`) now contains only persona/task guidance. The UI `HEURISTICS` constant `defaultMemoryPrompt` strings are cleaned in the same way, so "Reset to defaults" restores the clean researcher-facing text. Helper text below each prompt editor already guides researchers not to include schema or output-format rules.
 
 ---
 
@@ -509,38 +521,6 @@ Dashboard (maxDailyNotifications) → MongoDB (proactiveSettings.maxDailyNotific
 ```
 
 ---
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

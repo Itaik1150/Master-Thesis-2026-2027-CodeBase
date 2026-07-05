@@ -9,7 +9,7 @@ written by TemporalHeuristic.create_memory() below.
 Logic:
   - If any future mention has a when_iso that is 6–24 hours away (the lead-time
     window), and has not already been fired, generate a message about it.
-  - After a successful FCM send, mark_fired() stamps the mention so it never
+  - After a successful FCM send, clear_after_send() stamps the mention so it never
     triggers a second time.
   - If no qualifying event exists this cycle, a warm cold-start invitation is
     generated instead (Task 6.2: guaranteed fallback — never returns None).
@@ -31,42 +31,6 @@ from bson import ObjectId as _ObjectId
 from heuristics.base_heuristic import BaseHeuristic
 
 
-# ── Configuration ─────────────────────────────────────────────────────────────
-# Window in which we consider an upcoming event "close enough" to act on.
-LEAD_TIME_MIN_HOURS: float = 6
-LEAD_TIME_MAX_HOURS: float = 24
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-def mark_fired(user_id: str, mention_text: str, when_iso: str, mongodb_client) -> None:
-    """
-    Stamp a temporal mention as fired on the user's MongoDB document so it
-    cannot trigger a second notification. Uses $addToSet so duplicate calls
-    are safe.
-    """
-    from bson import ObjectId
-
-    key = _make_key(mention_text, when_iso)
-    try:
-        if not mongodb_client.connect():
-            print(f"⚠️  temporal.mark_fired: could not connect to MongoDB for {user_id}")
-            return
-        mongodb_client.db[mongodb_client.users_collection].update_one(
-            {"_id": ObjectId(user_id)},
-            {"$addToSet": {"proactiveMemory.fired_temporal_mentions": key}},
-        )
-        print(f"🕐 Temporal mention marked as fired for user {user_id}: '{mention_text[:40]}'")
-    except Exception as e:
-        print(f"⚠️  temporal.mark_fired error for {user_id}: {e}")
-    finally:
-        mongodb_client.disconnect()
-
-
-def _make_key(text: str, when_iso: str) -> str:
-    """Stable key for a (mention, datetime) pair to track which mentions have fired."""
-    return f"{text[:50].strip()}|{when_iso}"
-
-
 class TemporalHeuristic(BaseHeuristic):
     """
     Detects upcoming events the user has mentioned and sends a timely reminder
@@ -82,14 +46,19 @@ class TemporalHeuristic(BaseHeuristic):
     event is found, a warm cold-start invitation is generated instead of None.
     """
 
+    # Task 6.5: researcher-facing prompt — persona/task only, no schema or output constraints.
     DEFAULT_MEMORY_PROMPT = (
         "You analyze conversation messages for mentions of upcoming events, "
         "plans, appointments, or activities.\n\n"
         "For each future event found, extract:\n"
         '  "text":     concise description (e.g. "job interview", "doctor appointment")\n'
         '  "when_iso": ISO 8601 datetime string if timing is mentioned, or null if unclear\n\n'
-        "Today is {today_iso}. Resolve all relative dates against today.\n"
-        "Schema: {\"future_mentions\": [{text, when_iso}]}\n"
+        "Today is {today_iso}. Resolve all relative dates against today."
+    )
+
+    # Task 6.5: structural part — injected by _safe_memory_prompt(), never shown in UI.
+    MEMORY_SCHEMA: str = (
+        'Schema: {"future_mentions": [{"text": str, "when_iso": str or null}]}\n'
         'Return {"future_mentions": []} if no future events are mentioned.'
     )
 
@@ -110,10 +79,17 @@ class TemporalHeuristic(BaseHeuristic):
     )
 
     _CONV_SCAN_LIMIT: int = 5
+    _LEAD_TIME_MIN_HOURS: float = 6
+    _LEAD_TIME_MAX_HOURS: float = 24
 
     def __init__(self, user, llm_service, mongodb_client, prompts_from_db=None, default_language="he"):
         super().__init__(user, llm_service, mongodb_client, prompts_from_db, default_language)
         self._fired_nudge: Optional[dict] = None  # set in get_proactive_message
+
+    @staticmethod
+    def _make_key(text: str, when_iso: str) -> str:
+        """Stable key for a (mention, datetime) pair to track which mentions have fired."""
+        return f"{text[:50].strip()}|{when_iso}"
 
     def create_memory(self) -> None:
         """
@@ -150,10 +126,16 @@ class TemporalHeuristic(BaseHeuristic):
         if not all_texts:
             return
 
+        # Task 6.3: detect language from collected messages (character analysis,
+        # no extra DB call). Applied to self.language immediately; persisted in
+        # Phase C below so future cycles read from preferred_language (cascade lvl 1).
+        _detected_lang = self._detect_language(all_texts)
+        if _detected_lang:
+            self.language = _detected_lang
+
         # ── Phase B: LLM extraction ────────────────────────────────────────────
         today_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         joined = "\n".join(f"- {m}" for m in all_texts[-40:] if m)
-        # _safe_memory_prompt appends STRUCTURAL_JSON_SUFFIX (Task 6.5)
         system = self._safe_memory_prompt(
             self.memory_prompt.replace("{today_iso}", today_iso)
         )
@@ -179,34 +161,48 @@ class TemporalHeuristic(BaseHeuristic):
             print(f"⚠️  TemporalHeuristic.create_memory LLM ({self.username}): {e}")
             return
 
-        if not new_mentions:
+        # ── Phase C: Merge into MongoDB ────────────────────────────────────────
+        # Runs even when no new mentions are found so that the detected language
+        # is always persisted to proactiveMemory.preferred_language.
+        if not new_mentions and not _detected_lang:
             return
 
-        # ── Phase C: Merge into MongoDB (deduplicate by text, skip fired keys) ─
         try:
             if not self.mongodb_client.connect():
                 return
-            user_doc = self.mongodb_client.db[self.mongodb_client.users_collection].find_one(
-                {"_id": _ObjectId(self.user_id)},
-                {"proactiveMemory.future_mentions": 1,
-                 "proactiveMemory.fired_temporal_mentions": 1},
-            )
-            existing = (user_doc or {}).get("proactiveMemory", {}).get("future_mentions") or []
-            fired_keys = set(
-                (user_doc or {}).get("proactiveMemory", {}).get("fired_temporal_mentions") or []
-            )
-            existing_texts = {(m.get("text") or "").lower() for m in existing}
-            to_add = [
-                m for m in new_mentions
-                if m["text"].lower() not in existing_texts
-                and _make_key(m["text"], m.get("when_iso") or "") not in fired_keys
-            ]
+
+            to_add: list = []
+            if new_mentions:
+                user_doc = self.mongodb_client.db[self.mongodb_client.users_collection].find_one(
+                    {"_id": _ObjectId(self.user_id)},
+                    {"proactiveMemory.future_mentions": 1,
+                     "proactiveMemory.fired_temporal_mentions": 1},
+                )
+                existing = (user_doc or {}).get("proactiveMemory", {}).get("future_mentions") or []
+                fired_keys = set(
+                    (user_doc or {}).get("proactiveMemory", {}).get("fired_temporal_mentions") or []
+                )
+                existing_texts = {(m.get("text") or "").lower() for m in existing}
+                to_add = [
+                    m for m in new_mentions
+                    if m["text"].lower() not in existing_texts
+                    and self._make_key(m["text"], m.get("when_iso") or "") not in fired_keys
+                ]
+
+            update_doc: dict = {}
+            if _detected_lang:
+                update_doc["$set"] = {"proactiveMemory.preferred_language": _detected_lang}
             if to_add:
+                update_doc["$push"] = {
+                    "proactiveMemory.future_mentions": {"$each": to_add}
+                }
+                print(f"🕐 [{self.username}] Added {len(to_add)} new future mention(s)")
+
+            if update_doc:
                 self.mongodb_client.db[self.mongodb_client.users_collection].update_one(
                     {"_id": _ObjectId(self.user_id)},
-                    {"$push": {"proactiveMemory.future_mentions": {"$each": to_add}}},
+                    update_doc,
                 )
-                print(f"🕐 [{self.username}] Added {len(to_add)} new future mention(s)")
         except Exception as e:
             print(f"⚠️  TemporalHeuristic.create_memory write ({self.username}): {e}")
         finally:
@@ -225,7 +221,6 @@ class TemporalHeuristic(BaseHeuristic):
         fired_keys = set(self._memory.get("fired_temporal_mentions") or [])
         now = datetime.now(timezone.utc)
 
-        # Find first qualifying mention
         for mention in future_mentions:
             if not isinstance(mention, dict):
                 continue
@@ -233,7 +228,7 @@ class TemporalHeuristic(BaseHeuristic):
             when_iso = mention.get("when_iso")
             if not text or not when_iso:
                 continue
-            if _make_key(text, when_iso) in fired_keys:
+            if self._make_key(text, when_iso) in fired_keys:
                 continue
             try:
                 when = datetime.fromisoformat(str(when_iso).replace("Z", "+00:00"))
@@ -242,7 +237,7 @@ class TemporalHeuristic(BaseHeuristic):
             except (ValueError, TypeError):
                 continue
             hours_until = (when - now).total_seconds() / 3600.0
-            if LEAD_TIME_MIN_HOURS <= hours_until <= LEAD_TIME_MAX_HOURS:
+            if self._LEAD_TIME_MIN_HOURS <= hours_until <= self._LEAD_TIME_MAX_HOURS:
                 self._fired_nudge = {
                     "mention_text": text,
                     "when_iso":     str(when_iso),
@@ -257,9 +252,13 @@ class TemporalHeuristic(BaseHeuristic):
             self.used_fallback  = True
             self.memory_content = ""
             prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            if self.language == "he":
+                fallback = f"היי {self.name}, יש משהו מעניין שאתה מצפה לו בקרוב?"
+            else:
+                fallback = f"Hi {self.name}, anything exciting coming up soon?"
             return self._cold_start_message(
                 prompt=prompt,
-                static_fallback=f"Hi {self.name}, anything exciting coming up soon?",
+                static_fallback=fallback,
             )
 
         n = self._fired_nudge
@@ -287,17 +286,30 @@ class TemporalHeuristic(BaseHeuristic):
             )
             if text and len(text) >= 2 and text[0] in ('"', "'") and text[0] == text[-1]:
                 text = text[1:-1].strip()
-            return text or f"Hi {self.name}, your event '{n['mention_text']}' is coming up!"
+            if text:
+                return text
+            raise ValueError("empty LLM response")
         except Exception as e:
             print(f"⚠️  TemporalHeuristic message LLM ({self.username}): {e}")
+            if self.language == "he":
+                return f"היי {self.name}, האירוע שלך '{n['mention_text']}' מתקרב!"
             return f"Hi {self.name}, your event '{n['mention_text']}' is coming up!"
 
     def clear_after_send(self) -> None:
         """Mark the fired temporal mention so it never triggers again."""
-        if self._fired_nudge:
-            mark_fired(
-                self.user_id,
-                self._fired_nudge["mention_text"],
-                self._fired_nudge["when_iso"],
-                self.mongodb_client,
+        if not self._fired_nudge:
+            return
+        key = self._make_key(self._fired_nudge["mention_text"], self._fired_nudge["when_iso"])
+        try:
+            if not self.mongodb_client.connect():
+                return
+            self.mongodb_client.db[self.mongodb_client.users_collection].update_one(
+                {"_id": _ObjectId(self.user_id)},
+                {"$addToSet": {"proactiveMemory.fired_temporal_mentions": key}},
             )
+            print(f"🕐 [{self.username}] Temporal mention marked as fired: "
+                  f"'{self._fired_nudge['mention_text'][:40]}'")
+        except Exception as e:
+            print(f"⚠️  TemporalHeuristic.clear_after_send ({self.username}): {e}")
+        finally:
+            self.mongodb_client.disconnect()

@@ -42,6 +42,12 @@ class BaseHeuristic(ABC):
     DEFAULT_MEMORY_PROMPT: str = ""
     DEFAULT_MESSAGE_PROMPT: str = ""
 
+    # ── Task 6.5: Per-heuristic schema (structural, not researcher-facing) ────
+    # Subclasses define the exact JSON schema and empty-return instruction here.
+    # Kept out of DEFAULT_MEMORY_PROMPT so researchers never see or need to
+    # maintain schema lines in the dashboard prompt editor.
+    MEMORY_SCHEMA: str = ""
+
     # ── Task 6.5: Structural safety suffixes ──────────────────────────────────
     # Appended by _safe_memory_prompt() / _safe_message_prompt() before every
     # LLM call so researchers cannot accidentally break output formatting by
@@ -111,11 +117,90 @@ class BaseHeuristic(ABC):
     def _target_lang(self) -> str:
         return "Hebrew" if self.language == "he" else "English"
 
+    # ── Task 6.3: Language detection helpers ───────────────────────────────────
+
+    @staticmethod
+    def _detect_language(texts: list) -> Optional[str]:
+        """
+        Detect language from user message texts using Hebrew character analysis.
+        Returns 'he' if Hebrew script is predominant (>15% of alphabetic chars),
+        'en' otherwise.  Returns None if texts is empty or has no alphabetic chars.
+        """
+        if not texts:
+            return None
+        sample = " ".join(str(t) for t in texts[:20] if t)
+        hebrew_count = sum(
+            1 for c in sample
+            if '\u05D0' <= c <= '\u05EA' or '\uFB1D' <= c <= '\uFB4E'
+        )
+        alpha_count = sum(1 for c in sample if c.isalpha())
+        if alpha_count == 0:
+            return None
+        return "he" if hebrew_count / alpha_count > 0.15 else "en"
+
+    def _ensure_language_detected(self) -> None:
+        """
+        Detect user language from recent conversation messages if preferred_language
+        is not yet stored in proactiveMemory. Writes the detected value to MongoDB
+        and updates self.language for the current cycle.
+
+        Used by GenericHeuristic (which reads no messages in create_memory).
+        Other heuristics call _detect_language() inline during create_memory() to
+        piggyback on their already-open DB connection and already-read messages.
+        """
+        if (self.user.get("proactiveMemory") or {}).get("preferred_language"):
+            return  # Already stored from a previous cycle
+
+        texts: list = []
+        try:
+            if not self.mongodb_client.connect():
+                return
+            metas = list(self.mongodb_client.db["metadata_conversations"].find(
+                {"userId": self.user_id},
+                sort=[("createdAt", -1)],
+                limit=2,
+            ))
+            for meta in metas:
+                msgs = list(self.mongodb_client.db["conversations"].find(
+                    {"conversationId": str(meta["_id"]), "role": "user"},
+                    sort=[("messageNumber", 1)],
+                    limit=20,
+                ))
+                texts.extend(m.get("content", "") for m in msgs if m.get("content"))
+
+            detected = self._detect_language(texts)
+            if detected:
+                self.mongodb_client.db[self.mongodb_client.users_collection].update_one(
+                    {"_id": ObjectId(self.user_id)},
+                    {"$set": {"proactiveMemory.preferred_language": detected}},
+                )
+                if detected != self.language:
+                    print(
+                        f"🌐 [{self.username}] Language auto-detected from messages: "
+                        f"{self.language} → {detected} ({('Hebrew' if detected == 'he' else 'English')})"
+                    )
+                    self.language = detected
+        except Exception as e:
+            print(f"⚠️  {self.__class__.__name__}._ensure_language_detected({self.username}): {e}")
+        finally:
+            self.mongodb_client.disconnect()
+
     # ── Task 6.5: Prompt safety helpers ───────────────────────────────────────
 
     def _safe_memory_prompt(self, researcher_prompt: str) -> str:
-        """Append the structural JSON formatting rule to any memory extraction prompt."""
-        return researcher_prompt + self.STRUCTURAL_JSON_SUFFIX
+        """
+        Build the full memory-extraction prompt for the LLM.
+
+        Structure:
+          [researcher_prompt]   ← persona / task description (editable in dashboard)
+          [MEMORY_SCHEMA]       ← JSON schema + empty-return rule (system-managed, per heuristic)
+          [STRUCTURAL_JSON_SUFFIX] ← "Return ONLY valid JSON" constraint (system-managed, shared)
+
+        This keeps schema definitions and output-format constraints completely out of
+        the researcher-facing text, satisfying Task 6.5.
+        """
+        schema_block = f"\n\n{self.MEMORY_SCHEMA}" if self.MEMORY_SCHEMA else ""
+        return researcher_prompt + schema_block + self.STRUCTURAL_JSON_SUFFIX
 
     def _safe_message_prompt(self, researcher_prompt: str) -> str:
         """Append the structural output rule to any message generation prompt."""
@@ -164,6 +249,10 @@ class BaseHeuristic(ABC):
         Re-read proactiveMemory from MongoDB into self.user.
         Must be called at the start of get_proactive_message() after create_memory()
         has written new data, so the message-generation step sees the fresh state.
+
+        Task 6.3: also re-runs the language cascade so that any preferred_language
+        written by create_memory() (language auto-detection) is picked up immediately
+        for the current cycle's message generation.
         """
         try:
             if self.mongodb_client.connect():
@@ -178,6 +267,17 @@ class BaseHeuristic(ABC):
                         **self.user,
                         "proactiveMemory": fresh.get("proactiveMemory") or {},
                     }
+                    # Re-run language cascade with the freshly loaded proactiveMemory
+                    fresh_memory = self.user.get("proactiveMemory") or {}
+                    refreshed = (
+                        fresh_memory.get("preferred_language")
+                        or self.user.get("language")
+                        or self.language
+                    )
+                    if refreshed != self.language:
+                        print(f"🌐 [{self.username}] Language refreshed after reload: "
+                              f"{self.language} → {refreshed}")
+                        self.language = refreshed
         except Exception as e:
             print(f"⚠️  {self.__class__.__name__}._reload_user({self.username}): {e}")
         finally:

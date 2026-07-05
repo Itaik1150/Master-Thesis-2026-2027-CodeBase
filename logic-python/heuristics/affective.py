@@ -42,6 +42,8 @@ class AffectiveHeuristic(BaseHeuristic):
     messages have been processed; create_memory() skips if none are new.
     """
 
+    # Task 6.5: researcher-facing prompt — persona/task only, no schema or output constraints.
+    # Schema and "Return ONLY valid JSON" are injected automatically by _safe_memory_prompt().
     DEFAULT_MEMORY_PROMPT = (
         "You analyze conversation messages for deep emotional content.\n"
         "Extract emotional expressions, personal struggles, vulnerable shares, "
@@ -51,8 +53,13 @@ class AffectiveHeuristic(BaseHeuristic):
         '  "affective_score": integer 1–10 (1=mildly emotional, 10=deeply personal/distressing)\n'
         '  "timestamp_iso":  use today\'s ISO datetime for all items\n'
         '  "used":           false\n\n'
-        "Schema: {\"emotional_memories\": [{content, affective_score, timestamp_iso, used}]}\n"
-        "Exclude casual mentions, surface-level topics, or purely factual statements.\n"
+        "Exclude casual mentions, surface-level topics, or purely factual statements."
+    )
+
+    # Task 6.5: structural part — injected by _safe_memory_prompt(), never shown in UI.
+    MEMORY_SCHEMA: str = (
+        'Schema: {"emotional_memories": [{"content": str, "affective_score": int 1\u201310, '
+        '"timestamp_iso": str, "used": false}]}\n'
         'Return {"emotional_memories": []} if no genuine emotional content is present.'
     )
 
@@ -113,6 +120,13 @@ class AffectiveHeuristic(BaseHeuristic):
         if current_count == 0 or current_count <= last_count:
             return  # No new messages to analyze
 
+        # Task 6.3: detect language from the messages collected above.
+        # No extra DB call — character analysis only. Result is written to
+        # proactiveMemory.preferred_language in Phase C below.
+        _detected_lang = self._detect_language(all_texts)
+        if _detected_lang:
+            self.language = _detected_lang  # Use correct language in this cycle
+
         # ── Phase B: LLM extraction (outside DB connection) ────────────────────
         today_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         joined = "\n".join(f"- {m}" for m in all_texts[-20:] if m)
@@ -149,6 +163,10 @@ class AffectiveHeuristic(BaseHeuristic):
             update: dict = {
                 "$set": {"proactiveMemory.last_affective_analyzed_msg_count": current_count}
             }
+            # Task 6.3: persist detected language so future cycles read it from
+            # proactiveMemory.preferred_language (level 1 of the cascade).
+            if _detected_lang:
+                update["$set"]["proactiveMemory.preferred_language"] = _detected_lang
             if new_memories:
                 update["$push"] = {
                     "proactiveMemory.emotional_memories": {"$each": new_memories}
@@ -258,6 +276,9 @@ class AffectiveHeuristic(BaseHeuristic):
                 return text
             except Exception as e:
                 print(f"⚠️  AffectiveHeuristic message LLM ({self.username}): {e}")
+                # Language-aware static fallback
+                if self.language == "he":
+                    return f"היי {self.name}, חשבתי על מה ששיתפת. איך אתה מרגיש עם זה עכשיו?"
                 return f"Hi {self.name}, I was thinking about what you shared. How are you feeling about it now?"
         else:
             # Cold start: no unused memories — Task 6.2: guaranteed fallback
@@ -272,9 +293,14 @@ class AffectiveHeuristic(BaseHeuristic):
                 "Generate a gentle emotional invitation letting them know you are "
                 "here as a listening ear today."
             )
+            # Language-aware static fallback if LLM fails
+            if self.language == "he":
+                fallback = f"היי {self.name}, רק בודק — אני כאן אם צריך אוזן קשבת."
+            else:
+                fallback = f"Hi {self.name}, just checking in — I'm here if you need a listening ear."
             return self._cold_start_message(
                 prompt=prompt,
-                static_fallback=f"Hi {self.name}, just checking in — I'm here if you need a listening ear.",
+                static_fallback=fallback,
                 user_content=uc,
             )
 

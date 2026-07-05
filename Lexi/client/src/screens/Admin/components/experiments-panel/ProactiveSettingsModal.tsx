@@ -77,8 +77,7 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             '  "affective_score": integer 1–10 (1=mild, 10=deeply personal)\n' +
             '  "timestamp_iso": today\'s ISO datetime\n' +
             '  "used": false\n\n' +
-            'Schema: {"emotional_memories": [{content, affective_score, timestamp_iso, used}]}\n' +
-            'Return {"emotional_memories": []} if no genuine emotional content is present.',
+            'Exclude casual mentions, surface-level topics, or purely factual statements.',
         defaultMessagePrompt:
             'You are an empathetic assistant that encourages emotional sharing.\n' +
             'Generate a warm, personal emotional check-in in {language} (max 15 words) ' +
@@ -98,9 +97,7 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             'For each future event found, extract:\n' +
             '  "text": concise description (e.g. "job interview", "doctor appointment")\n' +
             '  "when_iso": ISO 8601 datetime string if timing is mentioned, or null if unclear\n\n' +
-            'Today is {today_iso}. Resolve all relative dates against today.\n' +
-            'Schema: {"future_mentions": [{text, when_iso}]}\n' +
-            'Return {"future_mentions": []} if no future events are mentioned.',
+            'Today is {today_iso}. Resolve all relative dates against today.',
         defaultMessagePrompt:
             'You are a friendly assistant. Generate a warm, timely message in {language} (max 15 words) ' +
             'about the user\'s upcoming event or plan.\n' +
@@ -117,9 +114,7 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
         defaultMemoryPrompt:
             'You analyze conversation messages for EXPLICIT, concrete plans or commitments the user expressed.\n\n' +
             'Valid examples: "I\'ll go to the gym tomorrow", "I\'m starting that course next week"\n' +
-            'Invalid (too vague): "I want to be healthier", "Maybe I\'ll try that someday"\n\n' +
-            'Schema: {"intents": [{"intent": "concise English description"}]}\n' +
-            'Return {"intents": []} if no clear commitments are found.',
+            'Invalid (too vague): "I want to be healthier", "Maybe I\'ll try that someday"',
         defaultMessagePrompt:
             'You are a supportive, caring assistant.\n' +
             'Generate a gentle, friendly follow-up message in {language} (max 15 words) ' +
@@ -203,7 +198,6 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
     const [llmModel,              setLlmModel]              = useState('gpt-4o');
     const [configs,               setConfigs]               = useState<HeuristicConfigs>(buildDefaultConfigs);
     const [schedule,              setSchedule]              = useState<ScheduleSettings>(DEFAULT_SCHEDULE);
-    const [maxDailyNotifications, setMaxDailyNotifications] = useState(3);
     const [isLoading,             setIsLoading]             = useState(false);
 
     const serverBase = process.env.REACT_APP_API_URL || 'https://lexi-server-1rx9.onrender.com';
@@ -217,7 +211,6 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             setProactiveEnabled(ps.enabled);
             setFrequency(ps.frequency ?? 30);
             setLlmModel(ps.llmModel ?? 'gpt-4o');
-            setMaxDailyNotifications(ps.maxDailyNotifications ?? 3);
             setConfigs(initConfigs(ps.heuristicWeights, ps.heuristicPrompts));
             setSchedule({
                 allowedDays:   ps.schedule?.allowedDays?.length   ? ps.schedule.allowedDays   : DEFAULT_SCHEDULE.allowedDays,
@@ -382,7 +375,6 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                         heuristicPrompts,
                         schedule,
                         llmModel,
-                        maxDailyNotifications, // Task 6.8
                     },
                 },
             };
@@ -557,26 +549,6 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                 Select at least one allowed day and at least one time.
                             </Typography>
                         )}
-                    </Box>
-
-                    {/* Task 6.8: per-user daily notification cap */}
-                    <Box>
-                        <Typography variant="body1" fontWeight={500} gutterBottom>
-                            Daily Notification Limit
-                        </Typography>
-                        <TextField
-                            type="number"
-                            label="Max notifications per user per day"
-                            value={maxDailyNotifications}
-                            onChange={e => setMaxDailyNotifications(Math.max(1, Number(e.target.value)))}
-                            size="small"
-                            disabled={!proactiveEnabled}
-                            inputProps={{ min: 1 }}
-                            sx={{ width: 280 }}
-                        />
-                        <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
-                            Each user will receive at most this many proactive notifications per calendar day.
-                        </Typography>
                     </Box>
 
                     <Divider />

@@ -7,6 +7,10 @@ At startup, reads each enabled experiment's notification schedule
 APScheduler job per configured fire time / random window, gated to that
 experiment's own allowed days.
 
+An hourly reload job re-reads the DB and updates all registered fire-time jobs
+so that changes made in the Admin panel take effect within 60 minutes — no
+Render restart required.
+
 Falls back to a hardcoded default schedule if MongoDB is unreachable or no
 experiment has proactive settings configured yet, so the service never fails
 to start.
@@ -145,6 +149,52 @@ def job_listener(event):
         print(f"❌ Scheduler job raised an exception: {event.exception}")
 
 
+def _print_next_runs(scheduler: BlockingScheduler):
+    """Print the next scheduled run time for each registered job."""
+    jobs = [j for j in scheduler.get_jobs() if not j.id.startswith("heartbeat") and j.id != "reload_schedules"]
+    if not jobs:
+        print("   (no proactive jobs registered)")
+        return
+    for job in jobs:
+        nrt = job.next_run_time
+        nrt_str = nrt.strftime("%Y-%m-%d %H:%M %Z") if nrt else "unknown"
+        print(f"   {job.id:<50} → next: {nrt_str}")
+
+
+def reload_schedules(scheduler: BlockingScheduler):
+    """
+    Re-read experiment schedules from MongoDB and update APScheduler jobs in-place.
+    Removes all experiment-specific proactive_ jobs, then re-registers from DB.
+    Called automatically every hour so Admin-panel changes take effect without a restart.
+    """
+    now_str = datetime.now().strftime("%H:%M:%S")
+    print(f"\n🔄 [{now_str}] Reloading schedules from MongoDB…")
+
+    new_schedules = load_schedules_from_db()
+
+    # Remove all experiment-specific proactive jobs (keep fallback and system jobs)
+    for job in scheduler.get_jobs():
+        if job.id.startswith("proactive_") and not job.id.startswith("proactive_fallback_"):
+            try:
+                scheduler.remove_job(job.id)
+            except Exception:
+                pass
+
+    if new_schedules:
+        registered = register_jobs(scheduler, new_schedules)
+        print(f"🔄 Reload complete: {len(new_schedules)} experiment(s), {registered} job(s) registered")
+    else:
+        print("🔄 Reload: no enabled experiments — fallback jobs unchanged")
+
+    _print_next_runs(scheduler)
+
+
+def heartbeat():
+    """Emitted every 30 minutes so Render logs confirm the scheduler process is alive."""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"💓 [{now_str}] Scheduler heartbeat — process alive", flush=True)
+
+
 def register_jobs(scheduler: BlockingScheduler, schedules) -> int:
     """
     Register one APScheduler job per (experiment, fire_time) or
@@ -208,6 +258,7 @@ if __name__ == "__main__":
 
     print("=" * 60)
     print("🗓️  Lexi Proactive Scheduler")
+    print(f"   Started : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
     schedules = load_schedules_from_db()
@@ -223,11 +274,26 @@ if __name__ == "__main__":
             scheduler.add_job(proactive_job, "cron", hour=h, minute=m, id=f"proactive_fallback_{time_str}")
         registered = len(FALLBACK_FIRE_TIMES)
 
+    # Reload schedules from MongoDB every hour so Admin-panel changes take effect
+    # without needing a Render restart.
+    scheduler.add_job(
+        lambda: reload_schedules(scheduler),
+        "cron", minute=0,
+        id="reload_schedules", replace_existing=True,
+    )
+
+    # Heartbeat every 30 minutes — visible in Render logs to confirm the process is alive.
+    scheduler.add_job(
+        heartbeat, "interval", minutes=30,
+        id="heartbeat", replace_existing=True,
+    )
+
     scheduler.add_listener(job_listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
 
     print("=" * 60)
-    print(f"   Jobs registered: {registered}")
-    print(f"   Daily cap      : see DAILY_MESSAGE_LIMIT env var")
+    print(f"   Proactive jobs registered : {registered}")
+    print(f"   Schedule reload           : every hour (top of the hour)")
+    print(f"   Heartbeat                 : every 30 min")
     print(f"   Per-user day-of-week + heuristic weights re-verified live every cycle")
     print("   Press Ctrl+C to stop.")
     print("=" * 60)

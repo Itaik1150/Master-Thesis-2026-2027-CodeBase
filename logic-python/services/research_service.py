@@ -174,16 +174,10 @@ class ResearchService:
 
     def get_proactive_users_with_rate_limit(self, cycle_id: str) -> List[Dict]:
         """
-        Get proactive users, skipping those who already hit their per-experiment
-        daily notification cap.
-
-        Task 6.8: The daily cap is now read from each experiment's
-        proactiveSettings.maxDailyNotifications (default 3), replacing the removed
-        MAX_DAILY_NOTIFICATIONS = 999 hardcoded constant.
-
-        To avoid MongoDB connection conflicts with _load_experiment_settings(), the
-        loop opens and closes its own connection per-user and caches caps by
-        experiment ID to minimise DB calls.
+        Return all proactive users who have not yet received a notification in
+        the current scheduler cycle. Notification frequency is controlled
+        entirely by the schedule fire-times set by the researcher; there is no
+        separate daily-count cap.
         """
         users = self.get_all_proactive_users()
 
@@ -191,38 +185,14 @@ class ResearchService:
             return []
 
         eligible_users = []
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        experiment_caps: dict = {}  # cache: experiment_id str → max_daily int
 
         for user in users:
             user_id  = str(user["_id"])
             username = user.get("username", "Unknown")
-            exp_id   = str(user.get("experimentId", ""))
 
-            # Load per-experiment daily cap (cached per experiment, not per user)
-            if exp_id not in experiment_caps:
-                try:
-                    _, _, _, _, max_daily, _ = self._load_experiment_settings(user)
-                    experiment_caps[exp_id] = max_daily
-                except Exception:
-                    experiment_caps[exp_id] = 3  # safe default
-
-            max_daily = experiment_caps.get(exp_id, 3)
-
-            # Check daily cap and cycle deduplication (own connection per user)
             try:
                 if not mongodb_client.connect():
                     print(f"❌ Failed to connect to MongoDB for rate limiting {username}")
-                    continue
-
-                daily_count = mongodb_client.db["proactive_logs"].count_documents({
-                    "user_id": user_id,
-                    "status": "sent",
-                    "timestamp": {"$gte": today_start}
-                })
-
-                if daily_count >= max_daily:
-                    print(f"⏭️  {username} hit daily cap ({daily_count}/{max_daily}), skipping")
                     continue
 
                 in_cycle = mongodb_client.db["proactive_logs"].find_one({
@@ -292,18 +262,17 @@ class ResearchService:
 
     def _load_experiment_settings(self, user: dict) -> tuple:
         """
-        Read heuristicWeights, heuristicPrompts, schedule, llmModel,
-        maxDailyNotifications, and defaultLanguage from the experiment doc.
+        Read heuristicWeights, heuristicPrompts, schedule, llmModel, and
+        defaultLanguage from the experiment doc.
 
-        Returns (6-tuple):
-          heuristic_weights       — {"affective": int, ...} (sum = 100)
-          heuristic_prompts       — {"affective": {"memoryPrompt": str, ...}, ...}
-          schedule                — {"allowedDays": [...], "mode": ..., ...}
-          llm_model               — str | None
-          max_daily_notifications — int (Task 6.8)
-          default_language        — str (Task 6.3)
+        Returns (5-tuple):
+          heuristic_weights — {"affective": int, ...} (sum = 100)
+          heuristic_prompts — {"affective": {"memoryPrompt": str, ...}, ...}
+          schedule          — {"allowedDays": [...], "mode": ..., ...}
+          llm_model         — str | None
+          default_language  — str (Task 6.3)
 
-        Falls back gracefully: reactive=100, schedule=all-days, cap=3, lang="he"
+        Falls back gracefully: reactive=100, schedule=all-days, lang="he"
         if the experiment doc is missing or cannot be read.
         """
         _DEFAULT_WEIGHTS  = {
@@ -319,7 +288,6 @@ class ResearchService:
         heuristic_prompts: dict = {}
         schedule: dict          = dict(_DEFAULT_SCHEDULE)
         experiment_llm_model    = None
-        max_daily_notifications = 3
         default_language        = "he"
 
         try:
@@ -350,9 +318,6 @@ class ResearchService:
                         schedule.update(ps["schedule"])
                     if ps.get("llmModel"):
                         experiment_llm_model = ps["llmModel"]
-                    # Task 6.8: per-experiment daily cap
-                    if ps.get("maxDailyNotifications") is not None:
-                        max_daily_notifications = int(ps["maxDailyNotifications"])
                     # Task 6.3: experiment-level default language
                     if ps.get("defaultLanguage"):
                         default_language = ps["defaultLanguage"]
@@ -370,7 +335,6 @@ class ResearchService:
             heuristic_prompts,
             schedule,
             experiment_llm_model,
-            max_daily_notifications,
             default_language,
         )
 
@@ -482,7 +446,7 @@ class ResearchService:
         Per-user orchestration loop (Task 3.2 clean architecture):
 
         For each eligible user:
-          1. _load_experiment_settings()  → weights + prompts + schedule + LLM + cap + lang
+          1. _load_experiment_settings()  → weights + prompts + schedule + LLM + lang
           2. _is_today_allowed(schedule)  → per-user day-of-week safety net
           3. _select_heuristic(weights)   → one heuristic name
           4. _run_selected_heuristic()    → instantiate class, call get_proactive_message()
@@ -506,7 +470,7 @@ class ResearchService:
 
             # ── Load experiment settings (live MongoDB read, Task 4.5) ────────
             (heuristic_weights, heuristic_prompts, schedule,
-             experiment_llm_model, _max_daily, default_language) = \
+             experiment_llm_model, default_language) = \
                 self._load_experiment_settings(user)
 
             active_weights     = {k: v for k, v in heuristic_weights.items() if v > 0}
@@ -699,7 +663,7 @@ class ResearchService:
         print(f"    Cycle ID  : {cycle_id[:8]}")
         print(f"    Timestamp : {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"    LLM engine: {self.llm_service.provider.upper()} / {self.llm_service.model}")
-        print(f"    Config    : heuristic weights, prompts, schedule, cap, and language "
+        print(f"    Config    : heuristic weights, prompts, schedule, and language "
               f"read live per user from MongoDB")
         print("=" * 60)
 
