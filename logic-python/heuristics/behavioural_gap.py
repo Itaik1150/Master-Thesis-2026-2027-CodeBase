@@ -68,7 +68,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
 
     DEFAULT_MESSAGE_PROMPT = (
         "You are a supportive, caring assistant.\n"
-        "Generate a gentle, friendly follow-up message in {language} (max 15 words) "
+        "Generate a gentle, friendly follow-up message (max 15 words) "
         "asking whether the user followed through on their stated plan.\n"
         "Do NOT assume success or failure — stay curious and supportive.\n"
         "You MAY use the user's name once."
@@ -76,7 +76,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
 
     _COLD_START_PROMPT = (
         "You are a supportive, encouraging assistant.\n"
-        "Generate a warm, friendly check-in message in {language} (max 15 words) "
+        "Generate a warm, friendly check-in message (max 15 words) "
         "asking the user if they have been working towards any of their goals lately.\n"
         "Use the user's name naturally."
     )
@@ -284,7 +284,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
             print(f"🔍 [{self.username}] Gap cold-start — no pending followup")
             self.used_fallback  = True
             self.memory_content = ""
-            prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            prompt = self._COLD_START_PROMPT
             if self.language == "he":
                 fallback = f"היי {self.name}, איך מתקדם עם התוכניות שלך?"
             else:
@@ -299,7 +299,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
             print(f"🔍 [{self.username}] Gap cold-start — followup has no intent text")
             self.used_fallback  = True
             self.memory_content = ""
-            prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            prompt = self._COLD_START_PROMPT
             if self.language == "he":
                 fallback = f"היי {self.name}, איך מתקדם עם התוכניות שלך?"
             else:
@@ -313,9 +313,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
         self.memory_content = intent_text[:120]
         self.used_fallback  = False
 
-        system = self._safe_message_prompt(
-            self.message_prompt.replace("{language}", self._target_lang)
-        )
+        system = self._safe_message_prompt(self.message_prompt)
         user_content = (
             f"USER NAME: {self.name}\n"
             f"STATED PLAN: {intent_text}\n\n"

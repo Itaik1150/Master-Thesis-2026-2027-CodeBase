@@ -203,8 +203,19 @@ class BaseHeuristic(ABC):
         return researcher_prompt + schema_block + self.STRUCTURAL_JSON_SUFFIX
 
     def _safe_message_prompt(self, researcher_prompt: str) -> str:
-        """Append the structural output rule to any message generation prompt."""
-        return researcher_prompt + self.STRUCTURAL_MESSAGE_SUFFIX
+        """
+        Build the full message-generation prompt for the LLM.
+
+        Structure:
+          [researcher_prompt]      ← persona / tone description (editable in dashboard, no {language})
+          [language instruction]   ← "Write your response in Hebrew/English only." (system-managed)
+          [STRUCTURAL_MESSAGE_SUFFIX] ← "Return ONLY the final message text..." (system-managed)
+
+        Language is injected automatically from self._target_lang so researchers never need to
+        write {language} placeholders in their prompts (Task 6.5 / user request).
+        """
+        lang_instruction = f"\n\nWrite your response in {self._target_lang} only."
+        return researcher_prompt + lang_instruction + self.STRUCTURAL_MESSAGE_SUFFIX
 
     # ── Task 6.2: Cold-start helper ────────────────────────────────────────────
 

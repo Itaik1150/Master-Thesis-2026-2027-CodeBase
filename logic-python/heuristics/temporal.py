@@ -46,15 +46,15 @@ class TemporalHeuristic(BaseHeuristic):
     event is found, a warm cold-start invitation is generated instead of None.
     """
 
-    # Task 6.5: researcher-facing prompt — persona/task only, no schema or output constraints.
     DEFAULT_MEMORY_PROMPT = (
         "You analyze conversation messages for mentions of upcoming events, "
-        "plans, appointments, or activities.\n\n"
-        "Today is {today_iso}. Resolve all relative dates against today."
+        "plans, appointments, or activities."
     )
 
     # Task 6.5: structural part — injected by _safe_memory_prompt(), never shown in UI.
+    # {today_iso} is substituted at runtime in create_memory() after assembly.
     MEMORY_SCHEMA: str = (
+        "Today is {today_iso}. Resolve all relative dates against today.\n\n"
         "For each future event found, extract:\n"
         '  "text":     concise description (e.g. "job interview", "doctor appointment")\n'
         '  "when_iso": ISO 8601 datetime string if timing is mentioned, or null if unclear\n\n'
@@ -63,7 +63,7 @@ class TemporalHeuristic(BaseHeuristic):
     )
 
     DEFAULT_MESSAGE_PROMPT = (
-        "You are a friendly assistant. Generate a warm, timely message in {language} "
+        "You are a friendly assistant. Generate a warm, timely message "
         "(max 15 words) about the user's upcoming event or plan.\n"
         "If the event is still ahead: ask if they are ready or excited.\n"
         "If the event just passed: ask how it went.\n"
@@ -73,7 +73,7 @@ class TemporalHeuristic(BaseHeuristic):
 
     _COLD_START_PROMPT = (
         "You are a friendly, curious assistant.\n"
-        "Generate a warm, open-ended question in {language} (max 15 words) "
+        "Generate a warm, open-ended question (max 15 words) "
         "inviting the user to share any upcoming plans or events they are looking forward to.\n"
         "Use the user's name naturally."
     )
@@ -136,9 +136,8 @@ class TemporalHeuristic(BaseHeuristic):
         # ── Phase B: LLM extraction ────────────────────────────────────────────
         today_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         joined = "\n".join(f"- {m}" for m in all_texts[-40:] if m)
-        system = self._safe_memory_prompt(
-            self.memory_prompt.replace("{today_iso}", today_iso)
-        )
+        # {today_iso} lives in MEMORY_SCHEMA; substitute on the fully assembled prompt.
+        system = self._safe_memory_prompt(self.memory_prompt).replace("{today_iso}", today_iso)
 
         new_mentions = []
         try:
@@ -251,7 +250,7 @@ class TemporalHeuristic(BaseHeuristic):
             print(f"🕐 [{self.username}] Temporal cold-start — no event in window")
             self.used_fallback  = True
             self.memory_content = ""
-            prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            prompt = self._COLD_START_PROMPT
             if self.language == "he":
                 fallback = f"היי {self.name}, יש משהו מעניין שאתה מצפה לו בקרוב?"
             else:
@@ -269,9 +268,7 @@ class TemporalHeuristic(BaseHeuristic):
         self.memory_content = n["mention_text"][:120]
         self.used_fallback  = False
 
-        system = self._safe_message_prompt(
-            self.message_prompt.replace("{language}", self._target_lang)
-        )
+        system = self._safe_message_prompt(self.message_prompt)
         user_content = (
             f"USER NAME: {self.name}\n"
             f"EVENT: {n['mention_text']}\n"

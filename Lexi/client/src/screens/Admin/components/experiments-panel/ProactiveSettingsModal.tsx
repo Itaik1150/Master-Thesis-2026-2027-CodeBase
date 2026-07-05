@@ -24,6 +24,7 @@ import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { SnackbarStatus, useSnackbar } from '@contexts/SnackbarProvider';
 import { updateExperiment } from '@DAL/server-requests/experiments';
 import {
@@ -76,7 +77,7 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             'Exclude casual mentions, surface-level topics, or purely factual statements.',
         defaultMessagePrompt:
             'You are an empathetic assistant that encourages emotional sharing.\n' +
-            'Generate a warm, personal emotional check-in in {language} (max 15 words) ' +
+            'Generate a warm, personal emotional check-in (max 15 words) ' +
             'that directly references the specific emotional memory the user shared.\n' +
             'Acknowledge their feelings without being dramatic or clinical.\n' +
             'Invite them to share how they are feeling about it now.\n' +
@@ -90,10 +91,9 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
         hasMemoryPrompt: true,
         defaultMemoryPrompt:
             'You analyze conversation messages for mentions of upcoming events, ' +
-            'plans, appointments, or activities.\n\n' +
-            'Today is {today_iso}. Resolve all relative dates against today.',
+            'plans, appointments, or activities.',
         defaultMessagePrompt:
-            'You are a friendly assistant. Generate a warm, timely message in {language} ' +
+            'You are a friendly assistant. Generate a warm, timely message ' +
             '(max 15 words) about the user\'s upcoming event or plan.\n' +
             'If the event is still ahead: ask if they are ready or excited.\n' +
             'If the event just passed: ask how it went.\n' +
@@ -119,7 +119,7 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             '  - \'I should exercise more\'',
         defaultMessagePrompt:
             'You are a supportive, caring assistant.\n' +
-            'Generate a gentle, friendly follow-up message in {language} (max 15 words) ' +
+            'Generate a gentle, friendly follow-up message (max 15 words) ' +
             'asking whether the user followed through on their stated plan.\n' +
             'Do NOT assume success or failure \u2014 stay curious and supportive.\n' +
             'You MAY use the user\'s name once.',
@@ -133,7 +133,7 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
         defaultMemoryPrompt: '',
         defaultMessagePrompt:
             'You are a standard assistant. Generate a completely neutral, friendly ' +
-            'invitation to chat in {language} with zero emotional weight and no specific ' +
+            'invitation to chat with zero emotional weight and no specific ' +
             'topics (max 15 words). You MAY use the user\'s name once if it feels natural.',
     },
 };
@@ -662,7 +662,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
 
                                         {/* Collapsible prompt editor */}
                                         {cfg.enabled && (
-                                            <Box mt={1}>
+                                            <Box mt={1.5}>
                                                 <Button
                                                     size="small"
                                                     onClick={() => togglePromptsOpen(key)}
@@ -675,49 +675,82 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                                     <Box
                                                         display="flex"
                                                         flexDirection="column"
-                                                        gap={1.5}
-                                                        mt={1}
-                                                        pl={1}
-                                                        sx={{ borderLeft: '2px solid', borderColor: 'primary.light' }}
+                                                        gap={2.5}
+                                                        mt={1.5}
+                                                        pt={2}
+                                                        px={2}
+                                                        pb={2}
+                                                        sx={{
+                                                            borderRadius: 1.5,
+                                                            border: '1px dashed',
+                                                            borderColor: 'primary.light',
+                                                            backgroundColor: 'background.paper',
+                                                        }}
                                                     >
                                                         {meta.hasMemoryPrompt && (
+                                                            <Box>
+                                                                <Box display="flex" alignItems="center" gap={0.5} mb={0.75}>
+                                                                    <Typography variant="body2" fontWeight={600}>
+                                                                        Memory Prompt
+                                                                    </Typography>
+                                                                    <Tooltip
+                                                                        title="What to extract from conversations. Write persona/task instructions only — JSON output constraints are added automatically by the system."
+                                                                        placement="right"
+                                                                        arrow
+                                                                    >
+                                                                        <InfoOutlinedIcon sx={{ fontSize: 15, color: 'text.disabled', cursor: 'help' }} />
+                                                                    </Tooltip>
+                                                                </Box>
+                                                                <TextField
+                                                                    multiline
+                                                                    rows={4}
+                                                                    fullWidth
+                                                                    size="small"
+                                                                    value={cfg.memoryPrompt}
+                                                                    onChange={e => setPrompt(key, 'memoryPrompt', e.target.value)}
+                                                                />
+                                                            </Box>
+                                                        )}
+                                                        <Box>
+                                                            <Box display="flex" alignItems="center" gap={0.5} mb={0.75}>
+                                                                <Typography variant="body2" fontWeight={600}>
+                                                                    Message Prompt
+                                                                </Typography>
+                                                                <Tooltip
+                                                                    title="Persona and tone for the notification. Use {language} as a placeholder. Output constraints are added automatically — do not include 'Return ONLY the final message' rules."
+                                                                    placement="right"
+                                                                    arrow
+                                                                >
+                                                                    <InfoOutlinedIcon sx={{ fontSize: 15, color: 'text.disabled', cursor: 'help' }} />
+                                                                </Tooltip>
+                                                            </Box>
                                                             <TextField
-                                                                label="Memory Prompt"
                                                                 multiline
                                                                 rows={4}
                                                                 fullWidth
                                                                 size="small"
-                                                                value={cfg.memoryPrompt}
-                                                                onChange={e => setPrompt(key, 'memoryPrompt', e.target.value)}
-                                                                helperText="Write the persona and task instructions only (what to extract from conversations). Formatting and JSON output constraints are automatically added by the system — do not include 'Return ONLY valid JSON' or schema rules here."
+                                                                value={cfg.messagePrompt}
+                                                                onChange={e => setPrompt(key, 'messagePrompt', e.target.value)}
                                                             />
-                                                        )}
-                                                        <TextField
-                                                            label="Message Prompt"
-                                                            multiline
-                                                            rows={4}
-                                                            fullWidth
-                                                            size="small"
-                                                            value={cfg.messagePrompt}
-                                                            onChange={e => setPrompt(key, 'messagePrompt', e.target.value)}
-                                                            helperText="Write the persona and tone instructions only. Use {language} as a placeholder for the user's language. Output constraints are automatically added by the system — do not include 'Return ONLY the final message' rules here."
-                                                        />
-                                                        <Button
-                                                            size="small"
-                                                            variant="outlined"
-                                                            color="warning"
-                                                            sx={{ alignSelf: 'flex-start', textTransform: 'none' }}
-                                                            onClick={() => setConfigs(prev => ({
-                                                                ...prev,
-                                                                [key]: {
-                                                                    ...prev[key],
-                                                                    memoryPrompt:  meta.defaultMemoryPrompt,
-                                                                    messagePrompt: meta.defaultMessagePrompt,
-                                                                },
-                                                            }))}
-                                                        >
-                                                            Reset to defaults
-                                                        </Button>
+                                                        </Box>
+                                                        <Box>
+                                                            <Button
+                                                                size="small"
+                                                                variant="outlined"
+                                                                color="warning"
+                                                                sx={{ textTransform: 'none' }}
+                                                                onClick={() => setConfigs(prev => ({
+                                                                    ...prev,
+                                                                    [key]: {
+                                                                        ...prev[key],
+                                                                        memoryPrompt:  meta.defaultMemoryPrompt,
+                                                                        messagePrompt: meta.defaultMessagePrompt,
+                                                                    },
+                                                                }))}
+                                                            >
+                                                                Reset to defaults
+                                                            </Button>
+                                                        </Box>
                                                     </Box>
                                                 </Collapse>
                                             </Box>

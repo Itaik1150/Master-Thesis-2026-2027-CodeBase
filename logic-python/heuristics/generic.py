@@ -30,7 +30,7 @@ class GenericHeuristic(BaseHeuristic):
 
     DEFAULT_MESSAGE_PROMPT = (
         "You are a standard assistant. Generate a completely neutral, friendly "
-        "invitation to chat in {language} with zero emotional weight and no specific "
+        "invitation to chat with zero emotional weight and no specific "
         "topics (max 15 words). You MAY use the user's name once if it feels natural."
     )
 
@@ -79,9 +79,7 @@ class GenericHeuristic(BaseHeuristic):
         self.used_fallback  = False
         self.memory_content = ""
 
-        prompt = self._safe_message_prompt(
-            self.message_prompt.replace("{language}", self._target_lang)
-        )
+        prompt = self._safe_message_prompt(self.message_prompt)
         try:
             text = self.llm_service.call_with_prompt(
                 system=prompt,

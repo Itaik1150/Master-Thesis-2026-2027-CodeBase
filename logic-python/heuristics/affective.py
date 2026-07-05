@@ -65,7 +65,7 @@ class AffectiveHeuristic(BaseHeuristic):
 
     DEFAULT_MESSAGE_PROMPT = (
         "You are an empathetic assistant that encourages emotional sharing.\n"
-        "Generate a warm, personal emotional check-in in {language} (max 15 words) "
+        "Generate a warm, personal emotional check-in (max 15 words) "
         "that directly references the specific emotional memory the user shared.\n"
         "Acknowledge their feelings without being dramatic or clinical.\n"
         "Invite them to share how they are feeling about it now.\n"
@@ -74,7 +74,7 @@ class AffectiveHeuristic(BaseHeuristic):
 
     _COLD_START_PROMPT = (
         "You are an empathetic assistant that encourages emotional sharing.\n"
-        "Generate a gentle, warm invitation in {language} (max 15 words) "
+        "Generate a gentle, warm invitation (max 15 words) "
         "focused on emotional support and being a listening ear today.\n"
         "Use the user's name naturally."
     )
@@ -235,9 +235,7 @@ class AffectiveHeuristic(BaseHeuristic):
             self.memory_content = content[:120]
             self.used_fallback  = False
 
-            system = self._safe_message_prompt(
-                self.message_prompt.replace("{language}", self._target_lang)
-            )
+            system = self._safe_message_prompt(self.message_prompt)
             user_content = (
                 f"USER NAME: {self.name}\n"
                 f"EMOTIONAL MEMORY: {content}\n"
@@ -287,7 +285,7 @@ class AffectiveHeuristic(BaseHeuristic):
             self.used_fallback  = True
 
             print(f"💛 [{self.username}] Affective cold-start — no unused memories")
-            prompt = self._COLD_START_PROMPT.replace("{language}", self._target_lang)
+            prompt = self._COLD_START_PROMPT
             uc = (
                 f"USER NAME: {self.name}\n\n"
                 "Generate a gentle emotional invitation letting them know you are "
