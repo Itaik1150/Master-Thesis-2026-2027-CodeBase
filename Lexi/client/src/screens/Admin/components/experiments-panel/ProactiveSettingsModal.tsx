@@ -241,16 +241,32 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
         (schedule.mode === 'exact' ? schedule.fireTimes.length > 0 : schedule.randomWindows.length > 0);
 
     // ── Row handlers ───────────────────────────────────────────────────────────
+
+    /** Redistribute 100% equally among currently-enabled heuristics. */
+    const redistributeWeights = (draft: HeuristicConfigs): HeuristicConfigs => {
+        const enabledKeys = HEURISTIC_KEYS.filter(k => draft[k].enabled);
+        if (enabledKeys.length === 0) return draft;
+        const equalShare = Math.floor(100 / enabledKeys.length);
+        const remainder  = 100 - equalShare * enabledKeys.length;
+        const next = { ...draft };
+        enabledKeys.forEach((k, i) => {
+            next[k] = { ...next[k], weight: equalShare + (i === 0 ? remainder : 0) };
+        });
+        return next;
+    };
+
     const toggleHeuristic = (key: HeuristicKey) => {
-        setConfigs(prev => ({
-            ...prev,
-            [key]: {
-                ...prev[key],
-                enabled: !prev[key].enabled,
-                // When turning off, reset weight to 0
-                weight: prev[key].enabled ? 0 : prev[key].weight,
-            },
-        }));
+        setConfigs(prev => {
+            const toggled: HeuristicConfigs = {
+                ...prev,
+                [key]: {
+                    ...prev[key],
+                    enabled: !prev[key].enabled,
+                    weight:  prev[key].enabled ? 0 : prev[key].weight,
+                },
+            };
+            return redistributeWeights(toggled);
+        });
     };
 
     const setWeight = (key: HeuristicKey, value: number) => {
@@ -402,8 +418,10 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
         <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
             <DialogTitle>
                 <Box display="flex" alignItems="center" gap={1}>
-                    <NotificationsActiveIcon />
-                    Proactive Settings
+                    <NotificationsActiveIcon fontSize="medium" />
+                    <Typography variant="h6" fontWeight={700} component="span">
+                        Proactive Settings
+                    </Typography>
                 </Box>
             </DialogTitle>
 
@@ -412,7 +430,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
 
                     {/* ── Enable toggle ──────────────────────────────────────── */}
                     <Box display="flex" alignItems="center" justifyContent="space-between">
-                        <Typography variant="body1" fontWeight={500}>
+                        <Typography variant="subtitle1" fontWeight={600}>
                             Enable Proactive Mode
                         </Typography>
                         <Switch
@@ -424,7 +442,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
 
                     {/* ── Schedule: Days & Hours ──────────────────────────────── */}
                     <Box>
-                        <Typography variant="body1" fontWeight={500} gutterBottom>
+                        <Typography variant="subtitle1" fontWeight={600} gutterBottom>
                             Notification Schedule
                         </Typography>
 
@@ -556,7 +574,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
 
                     {/* ── LLM Model selector ─────────────────────────────────── */}
                     <Box>
-                        <Typography variant="body1" fontWeight={500} gutterBottom>
+                        <Typography variant="subtitle1" fontWeight={600} gutterBottom>
                             LLM Model
                         </Typography>
                         <FormControl size="small" fullWidth disabled={!proactiveEnabled}>
@@ -585,7 +603,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
 
                     {/* ── Heuristic probability weights ──────────────────────── */}
                     <Box>
-                        <Typography variant="body1" fontWeight={500} gutterBottom>
+                        <Typography variant="subtitle1" fontWeight={600} gutterBottom>
                             Heuristic Probability Weights
                         </Typography>
                         <Typography variant="caption" color="textSecondary" sx={{ mb: 1, display: 'block' }}>
@@ -607,9 +625,10 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                             border: '1px solid',
                                             borderColor: cfg.enabled ? 'primary.main' : 'divider',
                                             borderRadius: 2,
-                                            p: 1.5,
+                                            p: 2,
                                             opacity: proactiveEnabled ? 1 : 0.5,
-                                            transition: 'border-color 0.2s',
+                                            backgroundColor: cfg.enabled ? 'action.selected' : 'transparent',
+                                            transition: 'border-color 0.2s, background-color 0.2s',
                                         }}
                                     >
                                         {/* Row header: toggle + name + weight input */}
@@ -622,10 +641,10 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                                 color="primary"
                                             />
                                             <Box flex={1}>
-                                                <Typography variant="body2" fontWeight={500}>
+                                                <Typography variant="body1" fontWeight={600}>
                                                     {meta.label}
                                                 </Typography>
-                                                <Typography variant="caption" color="textSecondary">
+                                                <Typography variant="body2" color="textSecondary">
                                                     {meta.description}
                                                 </Typography>
                                             </Box>
@@ -710,16 +729,17 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
 
                         {/* Weight sum indicator */}
                         <Box display="flex" alignItems="center" gap={1} mt={2}>
-                            <Typography variant="body2" color="textSecondary">
+                            <Typography variant="body1" color="textSecondary" fontWeight={500}>
                                 Total active weight:
                             </Typography>
                             <Chip
                                 label={`${totalWeight}%`}
                                 color={!anyEnabled ? 'default' : isWeightValid ? 'success' : 'error'}
-                                size="small"
+                                size="medium"
+                                sx={{ fontWeight: 700, fontSize: '0.85rem' }}
                             />
                             {anyEnabled && !isWeightValid && (
-                                <Typography variant="caption" color="error">
+                                <Typography variant="body2" color="error" fontWeight={500}>
                                     Must equal 100% before saving
                                 </Typography>
                             )}
