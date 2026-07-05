@@ -71,12 +71,13 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
         hasMemoryPrompt: true,
         defaultMemoryPrompt:
             'You analyze conversation messages for deep emotional content.\n' +
-            'Extract emotional expressions, personal struggles, vulnerable shares, and meaningful life events.\n\n' +
-            'For each emotional share found, produce an object with:\n' +
-            '  "content": exact quote or close paraphrase\n' +
-            '  "affective_score": integer 1–10 (1=mild, 10=deeply personal)\n' +
-            '  "timestamp_iso": today\'s ISO datetime\n' +
-            '  "used": false\n\n' +
+            'Extract emotional expressions, personal struggles, vulnerable shares, ' +
+            'and meaningful life events shared by the user.\n\n' +
+            'For each genuine emotional share, produce an object with:\n' +
+            '  "content":        exact quote or close paraphrase of the emotional share\n' +
+            '  "affective_score": integer 1\u201310 (1=mildly emotional, 10=deeply personal/distressing)\n' +
+            '  "timestamp_iso":  use today\'s ISO datetime for all items\n' +
+            '  "used":           false\n\n' +
             'Exclude casual mentions, surface-level topics, or purely factual statements.',
         defaultMessagePrompt:
             'You are an empathetic assistant that encourages emotional sharing.\n' +
@@ -93,17 +94,19 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             'Sends a timely message asking how they are preparing — or, if the event just passed, how it went.',
         hasMemoryPrompt: true,
         defaultMemoryPrompt:
-            'You analyze conversation messages for mentions of upcoming events, plans, appointments, or activities.\n\n' +
+            'You analyze conversation messages for mentions of upcoming events, ' +
+            'plans, appointments, or activities.\n\n' +
             'For each future event found, extract:\n' +
-            '  "text": concise description (e.g. "job interview", "doctor appointment")\n' +
+            '  "text":     concise description (e.g. "job interview", "doctor appointment")\n' +
             '  "when_iso": ISO 8601 datetime string if timing is mentioned, or null if unclear\n\n' +
             'Today is {today_iso}. Resolve all relative dates against today.',
         defaultMessagePrompt:
-            'You are a friendly assistant. Generate a warm, timely message in {language} (max 15 words) ' +
-            'about the user\'s upcoming event or plan.\n' +
+            'You are a friendly assistant. Generate a warm, timely message in {language} ' +
+            '(max 15 words) about the user\'s upcoming event or plan.\n' +
             'If the event is still ahead: ask if they are ready or excited.\n' +
             'If the event just passed: ask how it went.\n' +
-            'Never confuse past and future timing. You MAY use the user\'s name once.',
+            'Never confuse past and future timing. ' +
+            'You MAY use the user\'s name once.',
     },
     behaviouralGap: {
         label: 'Behavioural Gap',
@@ -112,14 +115,21 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
             'Sends a gentle follow-up to check whether they followed through.',
         hasMemoryPrompt: true,
         defaultMemoryPrompt:
-            'You analyze conversation messages for EXPLICIT, concrete plans or commitments the user expressed.\n\n' +
-            'Valid examples: "I\'ll go to the gym tomorrow", "I\'m starting that course next week"\n' +
-            'Invalid (too vague): "I want to be healthier", "Maybe I\'ll try that someday"',
+            'You analyze conversation messages from a user.\n' +
+            'Extract only EXPLICIT, concrete plans or commitments the user expressed.\n\n' +
+            'Valid examples:\n' +
+            '  - \'I\'ll go to the gym tomorrow\'\n' +
+            '  - \'I\'m starting that online course next week\'\n' +
+            '  - \'I plan to call my mom tonight\'\n\n' +
+            'Invalid (too vague \u2014 do NOT include):\n' +
+            '  - \'I want to be healthier\'\n' +
+            '  - \'Maybe I\'ll try that someday\'\n' +
+            '  - \'I should exercise more\'',
         defaultMessagePrompt:
             'You are a supportive, caring assistant.\n' +
             'Generate a gentle, friendly follow-up message in {language} (max 15 words) ' +
             'asking whether the user followed through on their stated plan.\n' +
-            'Do NOT assume success or failure — stay curious and supportive.\n' +
+            'Do NOT assume success or failure \u2014 stay curious and supportive.\n' +
             'You MAY use the user\'s name once.',
     },
     generic: {
@@ -130,9 +140,9 @@ const HEURISTICS: Record<HeuristicKey, HeuristicMeta> = {
         hasMemoryPrompt: false,
         defaultMemoryPrompt: '',
         defaultMessagePrompt:
-            'You are a standard assistant. Generate a completely neutral, friendly invitation to chat in {language} ' +
-            '(max 15 words) with zero emotional weight and no specific topics. ' +
-            'You MAY use the user\'s name once if it feels natural.',
+            'You are a standard assistant. Generate a completely neutral, friendly ' +
+            'invitation to chat in {language} with zero emotional weight and no specific ' +
+            'topics (max 15 words). You MAY use the user\'s name once if it feels natural.',
     },
 };
 
@@ -222,7 +232,6 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
             setProactiveEnabled(false);
             setFrequency(30);
             setLlmModel('gpt-4o');
-            setMaxDailyNotifications(3);
             setConfigs(buildDefaultConfigs());
             setSchedule(DEFAULT_SCHEDULE);
         }
