@@ -717,7 +717,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                                                     Message Prompt
                                                                 </Typography>
                                                                 <Tooltip
-                                                                    title="Persona and tone for the notification. Use {language} as a placeholder. Output constraints are added automatically — do not include 'Return ONLY the final message' rules."
+                                                                    title="Persona and tone for the notification. Output constraints are added automatically — do not include 'Return ONLY the final message' rules."
                                                                     placement="right"
                                                                     arrow
                                                                 >
