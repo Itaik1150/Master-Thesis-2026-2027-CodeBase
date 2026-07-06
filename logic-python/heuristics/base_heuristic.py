@@ -86,12 +86,12 @@ class BaseHeuristic(ABC):
         # Level 1: explicit field in proactiveMemory (written by previous cycles)
         # Level 2: top-level user document field (set at registration)
         # Level 3: experiment-level default passed from _load_experiment_settings()
-        # Level 4: absolute hardcoded fallback "he"
+        # Level 4: absolute hardcoded fallback "en"
         self.language: str = (
             memory.get("preferred_language")
             or user.get("language")
             or default_language
-            or "he"
+            or "en"
         )
         print(f"🌐 [{self.username}] Language resolved: {self.language}")
 

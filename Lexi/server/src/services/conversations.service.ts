@@ -29,6 +29,12 @@ class ConversationsService {
             throw error;
         }
 
+        // When a user replies, restore the original firstChatSentence (reset proactive injection).
+        // Fire-and-forget: don't block the message flow on the DB update.
+        if (message.role === 'user' && metadataConversation?.userId) {
+            usersService.resetInjectedPromptIfNeeded(metadataConversation.userId.toString()).catch(() => {});
+        }
+
         const messages: any[] = this.getConversationMessages(metadataConversation.agent, conversation, message);
         const chatRequest = this.getChatRequest(metadataConversation.agent, messages);
         await this.createMessageDoc(message, conversationId, conversation.length + 1);
