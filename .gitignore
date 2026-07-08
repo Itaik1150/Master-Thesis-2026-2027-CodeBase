@@ -462,6 +462,15 @@ $RECYCLE.BIN/
 # PROJECT SPECIFIC IGNORES
 # =============================================================================
 
+# Internal working documents (not for public repo)
+AI_GUIDELINES.md
+DEPLOYMENT.md
+PLAN.md
+PLAN_BACKLOG.md
+PROJECT_DOCUMENTATION.md
+WORK_PLAN.md
+
+
 # Firebase
 google-services.json
 GoogleService-Info.plist
