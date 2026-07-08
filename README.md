@@ -8,20 +8,6 @@ A full-stack research platform for studying **AI-initiated proactive conversatio
 
 ---
 
-## Research Design
-
-This platform supports a **between-subjects experiment** with three participant conditions:
-
-| Condition | Description |
-|-----------|-------------|
-| **Affective Proactive** | The agent monitors emotional content in past conversations and sends personalized, empathetic check-ins referencing what the user shared |
-| **Generic Proactive** | The agent sends neutral, non-personalized invitations to chat — no emotional framing or memory |
-| **Reactive (Control)** | No proactive notifications; the agent only responds when the participant initiates |
-
-The central research question is whether **affect-aware proactive AI agents** produce measurably different engagement, emotional disclosure, or wellbeing outcomes compared to generic or reactive baseline conditions.
-
----
-
 ## Proactive Heuristic Engine
 
 The core research contribution is a **modular, probability-based heuristic engine** (`logic-python/`). Each notification cycle, the system selects one of four heuristics according to researcher-configured probability weights:
