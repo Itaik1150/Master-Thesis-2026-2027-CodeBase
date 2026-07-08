@@ -153,4 +153,4 @@ python run_cycle.py
 
 **Lexi web platform** — original work by [Tomer Lavan](https://github.com/Tomer-Lavan/Lexi).
 
-**Thesis extensions** — proactive notification engine, heuristic memory system, experiment management dashboard, Android app, and cloud deployment: Itai Katzir, Master's Thesis 2026–2027.
+**Thesis extensions** — proactive notification engine, heuristic memory system, experiment management dashboard, Android app, and cloud deployment: Itai Kohn, Master's Thesis 2026–2027.
