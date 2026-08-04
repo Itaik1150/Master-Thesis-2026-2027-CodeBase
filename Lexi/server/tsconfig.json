@@ -4,7 +4,7 @@
     /* Basic Options */
     // "incremental": true,                   /* Enable incremental compilation */
     "target": "es6" /* Specify ECMAScript target version: 'ES3' (default), 'ES5', 'ES2015', 'ES2016', 'ES2017', 'ES2018', 'ES2019', 'ES2020', or 'ESNEXT'. */,
-    "module": "commonjs" /* Specify module code generation: 'none', 'commonjs', 'amd', 'system', 'umd', 'es2015', 'es2020', or 'ESNext'. */,
+    "module": "Node16" /* Specify module code generation: 'none', 'commonjs', 'amd', 'system', 'umd', 'es2015', 'es2020', or 'ESNext'. */,
     "lib": [
       "es2015",
       "dom"
@@ -43,19 +43,10 @@
     // "noFallthroughCasesInSwitch": true,    /* Report errors for fallthrough cases in switch statement. */
     // "noUncheckedIndexedAccess": true,      /* Include 'undefined' in index signature results */
     /* Module Resolution Options */
-    "moduleResolution": "node",
-    "ignoreDeprecations": "6.0",
-    "baseUrl": "./",
-    // "paths": {
-    //     "@db/*": ["db/*"],
-    //     "@business-logic/*": ["business-logic/*"],
-    //     "@agents/*": ["agents/*"],
-    //     "@routers/*": ["routers/*"],
-    //     "@middleware/*": ["middleware/*"],
-    //     "@strategies/*": ["strategies/*"],
-    //     "@configuration/*": ["configuration/*"],
-    //     "@utils/*": ["utils/*"]
-    // } /* A series of entries which re-map imports to lookup locations relative to the 'baseUrl'. */,
+    "moduleResolution": "node16",
+    "paths": {
+      "src/*": ["./src/*"]
+    },
     // "rootDirs": [],                        /* List of root folders whose combined content represents the structure of the project at runtime. */
     // "typeRoots": [],                       /* List of folders to include type definitions from. */
     "types": [
