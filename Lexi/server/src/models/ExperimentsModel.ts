@@ -57,7 +57,7 @@ export const experimentsSchema = new Schema<IExperiment>(
                 },
                 schedule: {
                     allowedDays:   { type: [Number], default: [0, 1, 2, 3, 4, 5, 6] }, // 0=Sun .. 6=Sat
-                    mode:          { type: String, default: 'exact' }, // 'exact' | 'random'
+                    mode:          { type: String, default: 'exact' }, // 'exact' | 'random' | 'ai_agent'
                     fireTimes:     { type: [String], default: ['13:45', '17:30', '21:15'] }, // "HH:MM" strings, unlimited, used when mode='exact'
                     randomWindows: {
                         type: [{ start: { type: String }, end: { type: String }, count: { type: Number, default: 1 } }],

@@ -10,12 +10,14 @@ and generates the check-in message. Memories are marked used as soon as they
 are selected, so each one fires at most once.
 
 MongoDB fields used (all inside proactiveMemory):
-  emotional_memories: [{content, affective_score, timestamp_iso, used}]
-  last_affective_analyzed_msg_count: int — total user messages seen at last analysis.
+  emotional_memories: [{memory_id, content, affective_score, timestamp_iso, used}]
+  affective_scanned_conversation_ids: List[str] — IDs of conversations already
+    analyzed for emotional content. Mirrors the gap_scanned_conversation_ids
+    pattern in BehaviouralGapHeuristic (Task 6.6).
 
-Task 6.6 note: last_affective_analyzed_msg_count is PRIVATE to AffectiveHeuristic.
+Task 6.6 note: affective_scanned_conversation_ids is PRIVATE to AffectiveHeuristic.
   No other heuristic must read or write this field. Its name is intentionally
-  prefixed with "affective_" (abbreviated as "last_affective_") to enforce isolation.
+  prefixed with "affective_" to enforce isolation.
 """
 
 from __future__ import annotations
@@ -36,10 +38,10 @@ class AffectiveHeuristic(BaseHeuristic):
     ensures there is always something to send when affective is selected).
 
     Memory field: proactiveMemory.emotional_memories
-      List of {content, affective_score (1-10), timestamp_iso, used: bool}
+      List of {memory_id, content, affective_score (1-10), timestamp_iso, used: bool}
 
-    Deduplication: last_affective_analyzed_msg_count tracks how many user
-    messages have been processed; create_memory() skips if none are new.
+    Deduplication: affective_scanned_conversation_ids tracks which conversation
+    IDs have already been analyzed; create_memory() skips them entirely.
     """
 
     # Task 6.5: researcher-facing prompt — persona/task only, no schema or output constraints.
@@ -84,20 +86,35 @@ class AffectiveHeuristic(BaseHeuristic):
 
     def create_memory(self) -> None:
         """
-        Scan the last N conversations for unprocessed user messages.
+        Scan conversations NOT yet in affective_scanned_conversation_ids.
         Extract emotional_memories via LLM and push new ones to MongoDB.
-        Skips entirely if no new messages since the last analysis run.
+        Mirrors the gap_scanned_conversation_ids pattern (Task 6.6): once a
+        conversation is processed it is never re-analyzed, eliminating both the
+        sliding-window miss bug and duplicate-extraction bug.
         """
         memory = self._memory
-        last_count = int(memory.get("last_affective_analyzed_msg_count") or 0)
-        all_texts = []
+        scanned_ids: set = set(memory.get("affective_scanned_conversation_ids") or [])
+        all_texts: list = []
+        newly_scanned_ids: list = []
 
-        # ── Phase A: Read messages ─────────────────────────────────────────────
+        # ── Phase A: Read messages from UNANALYZED conversations only ─────────
         try:
             if not self.mongodb_client.connect():
                 return
+
+            # Build an exclusion query so MongoDB returns only unscanned convs.
+            scanned_oids = []
+            for cid in scanned_ids:
+                try:
+                    scanned_oids.append(_ObjectId(cid))
+                except Exception:
+                    pass
+            query: dict = {"userId": self.user_id}
+            if scanned_oids:
+                query["_id"] = {"$nin": scanned_oids}
+
             recent_metas = list(self.mongodb_client.db["metadata_conversations"].find(
-                {"userId": self.user_id},
+                query,
                 sort=[("createdAt", -1)],
                 limit=self._CONV_SCAN_LIMIT,
             ))
@@ -109,64 +126,70 @@ class AffectiveHeuristic(BaseHeuristic):
                     {"conversationId": conv_id, "role": "user"},
                     sort=[("messageNumber", 1)],
                 ))
-                all_texts.extend([m.get("content", "") for m in raw if m.get("content")])
+                texts = [m.get("content", "") for m in raw if m.get("content")]
+                if texts:
+                    all_texts.extend(texts)
+                # Mark as scanned even if empty — avoids re-fetching every cycle.
+                # Conversations with future messages will appear as a NEW conv doc.
+                newly_scanned_ids.append(conv_id)
         except Exception as e:
             print(f"⚠️  AffectiveHeuristic.create_memory read ({self.username}): {e}")
             return
         finally:
             self.mongodb_client.disconnect()
 
-        current_count = len(all_texts)
-        if current_count == 0 or current_count <= last_count:
-            return  # No new messages to analyze
+        if not newly_scanned_ids:
+            return  # Nothing new to process
 
         # Task 6.3: detect language from the messages collected above.
-        # No extra DB call — character analysis only. Result is written to
-        # proactiveMemory.preferred_language in Phase C below.
-        _detected_lang = self._detect_language(all_texts)
-        if _detected_lang:
-            self.language = _detected_lang  # Use correct language in this cycle
+        _detected_lang = None
+        if all_texts:
+            _detected_lang = self._detect_language(all_texts)
+            if _detected_lang:
+                self.language = _detected_lang
 
         # ── Phase B: LLM extraction (outside DB connection) ────────────────────
-        today_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        joined = "\n".join(f"- {m}" for m in all_texts[-20:] if m)
-        # _safe_memory_prompt appends STRUCTURAL_JSON_SUFFIX (Task 6.5)
-        system = self._safe_memory_prompt(
-            self.memory_prompt.replace("{today_iso}", today_iso)
-        )
-
-        new_memories = []
-        try:
-            raw_text = self.llm_service.call_with_prompt(
-                system=system,
-                user_content=f"User messages:\n{joined}",
-                json_mode=True,
-                max_tokens=600,
+        new_memories: list = []
+        if all_texts:
+            today_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            joined = "\n".join(f"- {m}" for m in all_texts[-20:] if m)
+            system = self._safe_memory_prompt(
+                self.memory_prompt.replace("{today_iso}", today_iso)
             )
-            parsed = json.loads(raw_text)
-            for item in (parsed.get("emotional_memories") or []):
-                content = (item.get("content") or "").strip()
-                if content:
-                    new_memories.append({
-                        "content":        content,
-                        "affective_score": max(1, min(10, int(item.get("affective_score") or 1))),
-                        "timestamp_iso":  item.get("timestamp_iso") or today_iso,
-                        "used":           False,
-                    })
-        except Exception as e:
-            print(f"⚠️  AffectiveHeuristic.create_memory LLM ({self.username}): {e}")
+            try:
+                raw_text = self.llm_service.call_with_prompt(
+                    system=system,
+                    user_content=f"User messages:\n{joined}",
+                    json_mode=True,
+                    max_tokens=600,
+                )
+                parsed = json.loads(raw_text)
+                for item in (parsed.get("emotional_memories") or []):
+                    content = (item.get("content") or "").strip()
+                    if content:
+                        new_memories.append({
+                            "memory_id":       str(_ObjectId()),  # Unique ID for surgical mark-as-used
+                            "content":         content,
+                            "affective_score": max(1, min(10, int(item.get("affective_score") or 1))),
+                            "timestamp_iso":   item.get("timestamp_iso") or today_iso,
+                            "used":            False,
+                        })
+            except Exception as e:
+                print(f"⚠️  AffectiveHeuristic.create_memory LLM ({self.username}): {e}")
 
         # ── Phase C: Write to MongoDB ──────────────────────────────────────────
         try:
             if not self.mongodb_client.connect():
                 return
             update: dict = {
-                "$set": {"proactiveMemory.last_affective_analyzed_msg_count": current_count}
+                "$addToSet": {
+                    "proactiveMemory.affective_scanned_conversation_ids": {
+                        "$each": newly_scanned_ids
+                    }
+                }
             }
-            # Task 6.3: persist detected language so future cycles read it from
-            # proactiveMemory.preferred_language (level 1 of the cascade).
             if _detected_lang:
-                update["$set"]["proactiveMemory.preferred_language"] = _detected_lang
+                update["$set"] = {"proactiveMemory.preferred_language": _detected_lang}
             if new_memories:
                 update["$push"] = {
                     "proactiveMemory.emotional_memories": {"$each": new_memories}
@@ -242,18 +265,30 @@ class AffectiveHeuristic(BaseHeuristic):
                 f"AFFECTIVE DEPTH: {score}/10\n\n"
                 "Craft a highly personalised empathetic check-in referencing this memory."
             )
-            # Mark this memory as used before generating (fire-once guarantee)
+            # Mark ONLY this specific memory as used (surgical — keyed by memory_id).
+            # memory_id guarantees a single-element update even if duplicate content
+            # somehow exists in the array. Falls back to positional $ for legacy
+            # memories created before memory_id was introduced.
             try:
                 if self.mongodb_client.connect():
-                    self.mongodb_client.db[self.mongodb_client.users_collection].update_one(
-                        {
-                            "_id": _ObjectId(self.user_id),
-                            "proactiveMemory.emotional_memories": {
-                                "$elemMatch": {"content": content, "used": False}
+                    memory_id = best.get("memory_id")
+                    if memory_id:
+                        self.mongodb_client.db[self.mongodb_client.users_collection].update_one(
+                            {"_id": _ObjectId(self.user_id)},
+                            {"$set": {"proactiveMemory.emotional_memories.$[elem].used": True}},
+                            array_filters=[{"elem.memory_id": memory_id}],
+                        )
+                    else:
+                        # Legacy fallback: match by content for pre-memory_id memories
+                        self.mongodb_client.db[self.mongodb_client.users_collection].update_one(
+                            {
+                                "_id": _ObjectId(self.user_id),
+                                "proactiveMemory.emotional_memories": {
+                                    "$elemMatch": {"content": content, "used": False}
+                                },
                             },
-                        },
-                        {"$set": {"proactiveMemory.emotional_memories.$.used": True}},
-                    )
+                            {"$set": {"proactiveMemory.emotional_memories.$.used": True}},
+                        )
                     print(f"💛 [{self.username}] Marked emotional memory as used: '{content[:50]}'")
             except Exception as e:
                 print(f"⚠️  AffectiveHeuristic mark-used ({self.username}): {e}")

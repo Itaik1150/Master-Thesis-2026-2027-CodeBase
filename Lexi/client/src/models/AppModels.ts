@@ -156,10 +156,10 @@ export interface RandomWindow {
 
 /** Notification schedule: which days are allowed and when to fire each day. */
 export interface ScheduleSettings {
-    allowedDays:   number[];       // 0=Sun .. 6=Sat
-    mode:          'exact' | 'random';
-    fireTimes:     string[];       // unlimited "HH:MM" strings, used when mode === 'exact'
-    randomWindows: RandomWindow[]; // used when mode === 'random'
+    allowedDays:   number[];                    // 0=Sun .. 6=Sat
+    mode:          'exact' | 'random' | 'ai_agent';
+    fireTimes:     string[];                    // unlimited "HH:MM" strings, used when mode === 'exact'
+    randomWindows: RandomWindow[];              // used when mode === 'random' or 'ai_agent' (stores the allowed window + count)
 }
 
 export interface ExperimentFeatures {

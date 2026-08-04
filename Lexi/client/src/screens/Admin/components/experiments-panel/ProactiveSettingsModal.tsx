@@ -301,7 +301,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
         });
     };
 
-    const setScheduleMode = (mode: 'exact' | 'random') => {
+    const setScheduleMode = (mode: 'exact' | 'random' | 'ai_agent') => {
         setSchedule(prev => ({ ...prev, mode }));
     };
 
@@ -469,7 +469,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                         <Typography variant="caption" color="textSecondary" sx={{ mb: 0.5, display: 'block' }}>
                             Notification times
                         </Typography>
-                        <Box display="flex" gap={1} mb={1.5}>
+                        <Box display="flex" gap={1} mb={1.5} flexWrap="wrap">
                             <Chip
                                 label="Exact times"
                                 clickable={proactiveEnabled}
@@ -484,6 +484,14 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                 onClick={() => proactiveEnabled && setScheduleMode('random')}
                                 color={schedule.mode === 'random' ? 'primary' : 'default'}
                                 variant={schedule.mode === 'random' ? 'filled' : 'outlined'}
+                                size="small"
+                            />
+                            <Chip
+                                label="✨ Let Agent Decide"
+                                clickable={proactiveEnabled}
+                                onClick={() => proactiveEnabled && setScheduleMode('ai_agent')}
+                                color={schedule.mode === 'ai_agent' ? 'secondary' : 'default'}
+                                variant={schedule.mode === 'ai_agent' ? 'filled' : 'outlined'}
                                 size="small"
                             />
                         </Box>
@@ -518,7 +526,7 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                     + Add time
                                 </Button>
                             </Box>
-                        ) : (
+                        ) : schedule.mode === 'random' ? (
                             <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
                                 <TextField
                                     type="time"
@@ -552,11 +560,48 @@ export const ProactiveSettingsModal: React.FC<ProactiveSettingsModalProps> = ({
                                     sx={{ width: 180 }}
                                 />
                             </Box>
+                        ) : (
+                            /* ai_agent mode: same window + count inputs, stored in randomWindows[0] */
+                            <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+                                <TextField
+                                    type="time"
+                                    label="Allowed window start"
+                                    value={schedule.randomWindows[0]?.start ?? '16:00'}
+                                    onChange={e => setRandomWindow('start', e.target.value)}
+                                    size="small"
+                                    disabled={!proactiveEnabled}
+                                    InputLabelProps={{ shrink: true }}
+                                    sx={{ width: 175 }}
+                                />
+                                <Typography variant="body2" color="textSecondary">to</Typography>
+                                <TextField
+                                    type="time"
+                                    label="Allowed window end"
+                                    value={schedule.randomWindows[0]?.end ?? '20:00'}
+                                    onChange={e => setRandomWindow('end', e.target.value)}
+                                    size="small"
+                                    disabled={!proactiveEnabled}
+                                    InputLabelProps={{ shrink: true }}
+                                    sx={{ width: 175 }}
+                                />
+                                <TextField
+                                    type="number"
+                                    label="Notifications per user"
+                                    value={schedule.randomWindows[0]?.count ?? 1}
+                                    onChange={e => setRandomWindow('count', Math.max(1, Math.min(20, Number(e.target.value))))}
+                                    size="small"
+                                    disabled={!proactiveEnabled}
+                                    inputProps={{ min: 1, max: 20 }}
+                                    sx={{ width: 185 }}
+                                />
+                            </Box>
                         )}
                         <Typography variant="caption" color="textSecondary" sx={{ mt: 1, display: 'block' }}>
                             {schedule.mode === 'exact'
                                 ? 'The system fires a cycle at each exact time above, on the allowed days only.'
-                                : 'The system fires the specified number of notifications at random minutes within this window, on the allowed days only.'}
+                                : schedule.mode === 'random'
+                                ? 'The system fires the specified number of notifications at random minutes within this window, on the allowed days only.'
+                                : 'Each day at 00:01 the AI queries each user\'s personal activity history and asks the LLM to pick the optimal notification times within the allowed window. Each user gets individually personalised scheduling.'}
                         </Typography>
                         {/* Task 6.4: timezone display */}
                         <Typography variant="caption" sx={{ mt: 0.5, display: 'block', color: 'text.secondary', fontStyle: 'italic' }}>

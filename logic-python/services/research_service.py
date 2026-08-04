@@ -674,6 +674,215 @@ class ResearchService:
                 "error": str(e),
             }
 
+    # ── AI-Driven Scheduling (Task 1.3) ───────────────────────────────────────
+
+    def plan_ai_schedule(
+        self,
+        user: dict,
+        window_start: str,
+        window_end: str,
+        count: int,
+    ) -> list:
+        """
+        Query this user's personal activity data and ask the LLM to choose
+        `count` optimal notification times within [window_start, window_end].
+
+        Data queried:
+          - metadata_conversations.lastMessageTimestamp (last 14 days) → when was
+            the user active in the app (hour-of-day distribution).
+          - proactive_logs.timestamp where status='sent' (last 7 days) → when we
+            have already sent recently (avoid collision).
+          - proactiveMemory.future_mentions → upcoming events that could anchor timing.
+          - proactiveMemory.emotional_memories count → rough emotional-state signal.
+
+        Falls back to evenly-spaced times within the window on any error so the
+        daily planner never blocks.
+        """
+        import json as _json
+        import re as _re
+        from zoneinfo import ZoneInfo
+
+        user_id  = str(user["_id"])
+        username = user.get("username", "Unknown")
+
+        # ── Evenly-spaced fallback ────────────────────────────────────────────
+        def _fallback_times():
+            sh, sm = map(int, window_start.split(":"))
+            eh, em = map(int, window_end.split(":"))
+            start_min = sh * 60 + sm
+            end_min   = eh * 60 + em
+            step = max(1, (end_min - start_min) // (count + 1))
+            result = []
+            for i in range(1, count + 1):
+                t = min(start_min + step * i, end_min - 1)
+                result.append(f"{t // 60:02d}:{t % 60:02d}")
+            return result[:count]
+
+        # ── Query user activity data ──────────────────────────────────────────
+        conv_hours  = []
+        notif_hours = []
+        upcoming    = []
+        emotional_signal = "none"
+
+        try:
+            if not mongodb_client.connect():
+                return _fallback_times()
+
+            # 1. Conversation hours (last 14 days) — from metadata_conversations
+            cutoff_14d_ms = int(
+                (datetime.now(timezone.utc) - timedelta(days=14)).timestamp() * 1000
+            )
+            conv_docs = list(mongodb_client.db["metadata_conversations"].find(
+                {"userId": user_id,
+                 "lastMessageTimestamp": {"$gte": cutoff_14d_ms}},
+                {"lastMessageTimestamp": 1},
+            ))
+            tz_il = ZoneInfo("Asia/Jerusalem")
+            conv_hours = [
+                datetime.fromtimestamp(d["lastMessageTimestamp"] / 1000, tz=tz_il).hour
+                for d in conv_docs if d.get("lastMessageTimestamp")
+            ]
+
+            # 2. Recent notification send hours (last 7 days) — from proactive_logs
+            cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
+            log_docs = list(mongodb_client.db["proactive_logs"].find(
+                {"user_id": user_id, "status": "sent",
+                 "timestamp": {"$gte": cutoff_7d}},
+                {"timestamp": 1},
+            ))
+            for d in log_docs:
+                ts = d.get("timestamp")
+                if ts:
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    notif_hours.append(ts.astimezone(tz_il).hour)
+
+            # 3. proactiveMemory
+            memory = user.get("proactiveMemory") or {}
+            upcoming = [
+                e.get("when_iso", "") for e in (memory.get("future_mentions") or [])
+                if e.get("when_iso")
+            ][:3]
+            em_count = len(memory.get("emotional_memories") or [])
+            emotional_signal = "none" if em_count == 0 else ("low" if em_count < 3 else "high")
+
+        except Exception as e:
+            print(f"⚠️  plan_ai_schedule: data query failed for {username}: {e}")
+            return _fallback_times()
+        finally:
+            try:
+                mongodb_client.disconnect()
+            except Exception:
+                pass
+
+        # ── Build LLM prompt ──────────────────────────────────────────────────
+        from zoneinfo import ZoneInfo as _ZI
+        day_name = datetime.now(_ZI("Asia/Jerusalem")).strftime("%A")
+
+        payload = {
+            "window":                  {"start": window_start, "end": window_end},
+            "count":                   count,
+            "today_day_of_week":       day_name,
+            "conversation_hours_14d":  conv_hours,
+            "notification_hours_7d":   notif_hours,
+            "upcoming_events_iso":     upcoming,
+            "emotional_state_signal":  emotional_signal,
+        }
+
+        system_prompt = (
+            "You are a smart notification scheduler for a wellbeing chatbot app.\n"
+            "Choose the best times to send push notifications to a specific user today.\n\n"
+            "Rules:\n"
+            f"- Return ONLY a valid JSON array of exactly {count} HH:MM strings, "
+            f"e.g. [\"17:30\", \"19:15\"].\n"
+            f"- All times must be strictly between {window_start} and {window_end}.\n"
+            "- Prefer hours where conversation_hours_14d shows the user was active.\n"
+            "- Avoid exact matches with notification_hours_7d (vary the timing).\n"
+            "- If upcoming_events_iso contains an event today, schedule a notification ~30 min before it.\n"
+            "- Space notifications at least 30 minutes apart.\n"
+            "- Return ONLY the JSON array — no explanation, no extra text."
+        )
+
+        try:
+            raw = self.llm_service.call_with_prompt(
+                system=system_prompt,
+                user_content=_json.dumps(payload, ensure_ascii=False),
+                json_mode=False,
+                temperature=0.3,
+                max_tokens=80,
+            )
+
+            # Extract the JSON array even if the LLM adds surrounding prose
+            match = _re.search(r'\[.*?\]', raw, _re.DOTALL)
+            if not match:
+                raise ValueError(f"No JSON array in LLM response: {raw!r}")
+            times = _json.loads(match.group())
+
+            # Validate: each time must be a valid HH:MM within the window
+            sh, sm = map(int, window_start.split(":"))
+            eh, em = map(int, window_end.split(":"))
+            start_min = sh * 60 + sm
+            end_min   = eh * 60 + em
+
+            valid = []
+            for t in times:
+                try:
+                    th, tm = map(int, str(t).split(":"))
+                    if start_min <= th * 60 + tm <= end_min:
+                        valid.append(f"{th:02d}:{tm:02d}")
+                except (ValueError, AttributeError):
+                    pass
+
+            if len(valid) < count:
+                print(f"⚠️  [{username}] LLM gave {len(valid)}/{count} valid times — "
+                      f"padding with fallback")
+                fallback = _fallback_times()
+                for fb in fallback:
+                    if fb not in valid:
+                        valid.append(fb)
+                    if len(valid) >= count:
+                        break
+
+            result = valid[:count]
+            print(f"🤖 [{username}] AI-planned times: {result}")
+            return result
+
+        except Exception as e:
+            print(f"⚠️  plan_ai_schedule: LLM failed for {username}: {e} — using fallback")
+            return _fallback_times()
+
+    def run_single_user_cycle(self, user_id: str) -> dict:
+        """
+        Run a complete proactive cycle for exactly one user.
+        Called by AI-scheduled per-user date-trigger jobs in scheduler.py.
+        Fetches the user doc fresh (checks still eligible), then delegates
+        to coordinated_send_and_inject() with a single-element list.
+        """
+        cycle_id = str(uuid.uuid4())
+        user = None
+        try:
+            if mongodb_client.connect():
+                user = mongodb_client.db[mongodb_client.users_collection].find_one(
+                    {"_id": ObjectId(user_id),
+                     "fcmToken":    {"$exists": True, "$ne": ""},
+                     "isProactive": True},
+                )
+        except Exception as e:
+            print(f"⚠️  run_single_user_cycle: DB fetch failed for {user_id[:8]}: {e}")
+        finally:
+            try:
+                mongodb_client.disconnect()
+            except Exception:
+                pass
+
+        if not user:
+            print(f"⚠️  run_single_user_cycle: user {user_id[:8]} not found or not eligible")
+            return {"success": False, "message": "User not eligible"}
+
+        results = self.coordinated_send_and_inject([user], cycle_id)
+        return {"success": True, "cycle_id": cycle_id, "results": results}
+
+
 _instance: Optional["ResearchService"] = None
 
 

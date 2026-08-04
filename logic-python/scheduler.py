@@ -58,6 +58,8 @@ else:
     print("   (paste full JSON from lexi-72330-firebase-adminsdk-....json)")
     sys.exit(1)
 
+from bson import ObjectId
+
 from services.research_service import get_research_service
 from utils.mongodb_client import mongodb_client
 
@@ -195,6 +197,97 @@ def heartbeat():
     print(f"💓 [{now_str}] Scheduler heartbeat — process alive", flush=True)
 
 
+def _get_experiment_users(experiment_id: str) -> list:
+    """Return all eligible proactive users (isProactive=True, have FCM token) for one experiment."""
+    try:
+        if not mongodb_client.connect():
+            return []
+        id_variants = [experiment_id, ObjectId(experiment_id)]
+        users = list(mongodb_client.db["users"].find({
+            "experimentId":  {"$in": id_variants},
+            "fcmToken":      {"$exists": True, "$ne": ""},
+            "isProactive":   True,
+        }))
+        return users
+    except Exception as e:
+        print(f"⚠️  _get_experiment_users({experiment_id[:8]}): {e}")
+        return []
+    finally:
+        try:
+            mongodb_client.disconnect()
+        except Exception:
+            pass
+
+
+def _run_single_user_proactive(user_id: str):
+    """Per-user proactive cycle triggered by AI-scheduled date jobs."""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n⏰ [{now_str}] AI-scheduled cycle for user {user_id[:8]}")
+    try:
+        get_research_service().run_single_user_cycle(user_id)
+    except Exception as e:
+        print(f"❌ _run_single_user_proactive({user_id[:8]}): {e}")
+
+
+def ai_daily_planner_job(scheduler: BlockingScheduler, experiment_id: str, window: dict, count: int):
+    """
+    Runs at 00:01 Jerusalem time on each allowed day for experiments using mode='ai_agent'.
+
+    For every eligible user in the experiment:
+      1. Calls research_service.plan_ai_schedule() which queries the user's activity
+         data and asks the LLM to pick `count` optimal HH:MM times within `window`.
+      2. Registers a per-user APScheduler date-trigger job at each chosen time.
+
+    Uses the 'ai_timed_' job-id prefix so the hourly reload_schedules pass does NOT
+    accidentally remove these ephemeral same-day jobs.
+    """
+    tz = ZoneInfo("Asia/Jerusalem")
+    now_tz   = datetime.now(tz)
+    now_str  = now_tz.strftime("%H:%M:%S")
+    window_start = window.get("start", "16:00")
+    window_end   = window.get("end",   "20:00")
+
+    print(f"\n🤖 [{now_str}] AI daily planner — experiment {experiment_id[:8]} "
+          f"window={window_start}–{window_end} count={count}")
+
+    try:
+        users = _get_experiment_users(experiment_id)
+        if not users:
+            print(f"   ⚠️  No eligible users for experiment {experiment_id[:8]}")
+            return
+
+        rs = get_research_service()
+        registered = 0
+
+        for user in users:
+            user_id  = str(user["_id"])
+            username = user.get("username", "Unknown")
+            try:
+                planned_times = rs.plan_ai_schedule(user, window_start, window_end, count)
+                for t_str in planned_times:
+                    h, m = map(int, t_str.split(":"))
+                    run_dt = now_tz.replace(hour=h, minute=m, second=0, microsecond=0)
+                    if run_dt <= now_tz:
+                        print(f"   ⏭️  [{username}] {t_str} is already past — skipping")
+                        continue
+                    job_id = f"ai_timed_{experiment_id}_{user_id}_{t_str.replace(':', '')}"
+                    scheduler.add_job(
+                        lambda uid=user_id: _run_single_user_proactive(uid),
+                        "date",
+                        run_date=run_dt,
+                        id=job_id,
+                        replace_existing=True,
+                    )
+                    print(f"   ✅ [{username}] → {t_str}")
+                    registered += 1
+            except Exception as e:
+                print(f"   ❌ [{username}] planning failed: {e}")
+
+        print(f"🤖 AI planner done: {registered} job(s) for {len(users)} user(s)")
+    except Exception as e:
+        print(f"❌ ai_daily_planner_job: {e}")
+
+
 def register_jobs(scheduler: BlockingScheduler, schedules) -> int:
     """
     Register one APScheduler job per (experiment, fire_time) or
@@ -206,7 +299,23 @@ def register_jobs(scheduler: BlockingScheduler, schedules) -> int:
         exp_id = sched["experiment_id"]
         dow = _day_of_week_str(sched["allowed_days"])
 
-        if sched["mode"] == "random" and sched["random_windows"]:
+        if sched["mode"] == "ai_agent" and sched["random_windows"]:
+            # Register ONE daily planner cron job at 00:01. It will query each user's
+            # activity data, call the LLM, and register per-user date-trigger jobs.
+            window = sched["random_windows"][0]
+            count  = max(1, int(window.get("count") or 1))
+            job_id = f"proactive_{exp_id}_ai_planner"
+            scheduler.add_job(
+                lambda s=scheduler, eid=exp_id, w=window, c=count: ai_daily_planner_job(s, eid, w, c),
+                "cron",
+                day_of_week=dow, hour=0, minute=1,
+                id=job_id, replace_existing=True,
+            )
+            job_count += 1
+            print(f"   🤖 AI planner job [{job_id}]: daily 00:01 ({dow}), "
+                  f"window={window.get('start')}–{window.get('end')}, count={count}")
+
+        elif sched["mode"] == "random" and sched["random_windows"]:
             for w_idx, window in enumerate(sched["random_windows"]):
                 try:
                     start_h, start_m = map(int, window["start"].split(":"))
