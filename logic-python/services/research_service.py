@@ -687,6 +687,10 @@ class ResearchService:
         Query this user's personal activity data and ask the LLM to choose
         `count` optimal notification times within [window_start, window_end].
 
+        Mid-day aware: if the planner runs after the window has opened, the
+        effective start is clipped to "now + 1 minute". If the current time is
+        already past window_end, returns [] so today is skipped gracefully.
+
         Data queried:
           - metadata_conversations.lastMessageTimestamp (last 14 days) → when was
             the user active in the app (hour-of-day distribution).
@@ -695,8 +699,8 @@ class ResearchService:
           - proactiveMemory.future_mentions → upcoming events that could anchor timing.
           - proactiveMemory.emotional_memories count → rough emotional-state signal.
 
-        Falls back to evenly-spaced times within the window on any error so the
-        daily planner never blocks.
+        Falls back to evenly-spaced times within the (effective) window on any
+        error so the daily planner never blocks.
         """
         import json as _json
         import re as _re
@@ -705,16 +709,47 @@ class ResearchService:
         user_id  = str(user["_id"])
         username = user.get("username", "Unknown")
 
-        # ── Evenly-spaced fallback ────────────────────────────────────────────
-        def _fallback_times():
+        # ── Mid-day window clip ────────────────────────────────────────────────
+        tz_il = ZoneInfo("Asia/Jerusalem")
+        now_il = datetime.now(tz_il)
+        try:
             sh, sm = map(int, window_start.split(":"))
             eh, em = map(int, window_end.split(":"))
-            start_min = sh * 60 + sm
-            end_min   = eh * 60 + em
-            step = max(1, (end_min - start_min) // (count + 1))
+        except ValueError:
+            print(f"⚠️  plan_ai_schedule: malformed window for {username}: "
+                  f"{window_start}–{window_end}")
+            return []
+
+        orig_start_min = sh * 60 + sm
+        end_min        = eh * 60 + em
+        # Times must be at least 1 minute in the future
+        now_min = now_il.hour * 60 + now_il.minute + 1
+        effective_start_min = max(orig_start_min, now_min)
+
+        if effective_start_min >= end_min:
+            print(f"⏭️  [{username}] Past allowed window "
+                  f"({window_start}–{window_end}, now={now_il.strftime('%H:%M')}) "
+                  f"— skipping today")
+            return []
+
+        # Clip the lower bound so LLM + fallback only propose future times
+        if effective_start_min > orig_start_min:
+            window_start = f"{effective_start_min // 60:02d}:{effective_start_min % 60:02d}"
+            print(f"🕒 [{username}] Mid-day clip: effective window "
+                  f"{window_start}–{window_end}")
+
+        # ── Evenly-spaced fallback ────────────────────────────────────────────
+        def _fallback_times():
+            sh2, sm2 = map(int, window_start.split(":"))
+            eh2, em2 = map(int, window_end.split(":"))
+            start_m = sh2 * 60 + sm2
+            end_m   = eh2 * 60 + em2
+            if start_m >= end_m:
+                return []
+            step = max(1, (end_m - start_m) // (count + 1))
             result = []
             for i in range(1, count + 1):
-                t = min(start_min + step * i, end_min - 1)
+                t = min(start_m + step * i, end_m - 1)
                 result.append(f"{t // 60:02d}:{t % 60:02d}")
             return result[:count]
 
@@ -737,7 +772,6 @@ class ResearchService:
                  "lastMessageTimestamp": {"$gte": cutoff_14d_ms}},
                 {"lastMessageTimestamp": 1},
             ))
-            tz_il = ZoneInfo("Asia/Jerusalem")
             conv_hours = [
                 datetime.fromtimestamp(d["lastMessageTimestamp"] / 1000, tz=tz_il).hour
                 for d in conv_docs if d.get("lastMessageTimestamp")
@@ -776,12 +810,13 @@ class ResearchService:
                 pass
 
         # ── Build LLM prompt ──────────────────────────────────────────────────
-        from zoneinfo import ZoneInfo as _ZI
-        day_name = datetime.now(_ZI("Asia/Jerusalem")).strftime("%A")
+        day_name = now_il.strftime("%A")
+        now_hhmm = now_il.strftime("%H:%M")
 
         payload = {
             "window":                  {"start": window_start, "end": window_end},
             "count":                   count,
+            "current_time":            now_hhmm,
             "today_day_of_week":       day_name,
             "conversation_hours_14d":  conv_hours,
             "notification_hours_7d":   notif_hours,
@@ -795,7 +830,8 @@ class ResearchService:
             "Rules:\n"
             f"- Return ONLY a valid JSON array of exactly {count} HH:MM strings, "
             f"e.g. [\"17:30\", \"19:15\"].\n"
-            f"- All times must be strictly between {window_start} and {window_end}.\n"
+            f"- All times must be strictly between {window_start} and {window_end} "
+            f"(current time is {now_hhmm} — do NOT pick any time at or before now).\n"
             "- Prefer hours where conversation_hours_14d shows the user was active.\n"
             "- Avoid exact matches with notification_hours_7d (vary the timing).\n"
             "- If upcoming_events_iso contains an event today, schedule a notification ~30 min before it.\n"
@@ -818,17 +854,17 @@ class ResearchService:
                 raise ValueError(f"No JSON array in LLM response: {raw!r}")
             times = _json.loads(match.group())
 
-            # Validate: each time must be a valid HH:MM within the window
-            sh, sm = map(int, window_start.split(":"))
-            eh, em = map(int, window_end.split(":"))
-            start_min = sh * 60 + sm
-            end_min   = eh * 60 + em
+            # Validate: each time must be a valid HH:MM within the effective window
+            sh_v, sm_v = map(int, window_start.split(":"))
+            eh_v, em_v = map(int, window_end.split(":"))
+            start_min = sh_v * 60 + sm_v
+            end_min_v = eh_v * 60 + em_v
 
             valid = []
             for t in times:
                 try:
                     th, tm = map(int, str(t).split(":"))
-                    if start_min <= th * 60 + tm <= end_min:
+                    if start_min <= th * 60 + tm <= end_min_v:
                         valid.append(f"{th:02d}:{tm:02d}")
                 except (ValueError, AttributeError):
                     pass
