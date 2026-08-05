@@ -13,10 +13,18 @@ interface SidebarProps {
 export const SidebarChat: React.FC<SidebarProps> = ({ setIsOpen, messageFontSize, setMessageFontSize }) => (
     <StyledList>
         <Box>
-            <StyledListItem onClick={() => setIsOpen(true)}>
-                <StyledListItemIcon>
+            <StyledListItem
+                onClick={() => setIsOpen(true)}
+                sx={{
+                    borderRadius: 1,
+                    backgroundColor: 'primary.main',
+                    color: 'primary.contrastText',
+                    '&:hover': { backgroundColor: 'primary.dark' },
+                }}
+            >
+                <StyledListItemIcon sx={{ color: 'inherit' }}>
                     <ExitToAppOutlinedIcon />
-                    <ListItemText>Finish</ListItemText>
+                    <ListItemText sx={{ color: 'inherit', fontWeight: 700 }}>Finish</ListItemText>
                 </StyledListItemIcon>
             </StyledListItem>
             <ListItem>

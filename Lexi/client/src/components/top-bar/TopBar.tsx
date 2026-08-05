@@ -52,9 +52,19 @@ const TopBar: React.FC<TopBarProps> = (props) => {
         <StyledAppBar position="static">
             <StyledToolBar sx={{ height: '8vh', minHeight: '8vh' }}>
                 {isMobile && /\/e\/.+\/c\/.+/.test(location.pathname) ? (
-                    <StyledIconButton color="inherit" onClick={() => setIsOpen(true)} style={{}}>
+                    <StyledIconButton
+                        color="inherit"
+                        onClick={() => setIsOpen(true)}
+                        sx={{
+                            px: 1.25,
+                            py: 0.5,
+                            borderRadius: 1,
+                            backgroundColor: 'rgba(255, 255, 255, 0.18)',
+                            '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.28)' },
+                        }}
+                    >
                         <ExitToAppOutlinedIcon />
-                        <AppBarText>Finish</AppBarText>
+                        <AppBarText sx={{ fontWeight: 700, fontSize: '1.2rem' }}>Finish</AppBarText>
                     </StyledIconButton>
                 ) : (
                     <Box display="flex" alignItems="center">
@@ -111,7 +121,7 @@ const TopBar: React.FC<TopBarProps> = (props) => {
                             <GitHubIcon style={{ fontSize: isLargerThanLaptop ? 40 : 28 }} />
                         </IconButton>
                     )}
-                    {activeUser && !activeUser.isAdmin && (
+                    {activeUser && !activeUser.isAdmin && !/\/e\/.+\/c\/.+/.test(location.pathname) && (
                         <LogoutButton size="small" variant="outlined" onClick={handleLogout}>
                             Logout
                         </LogoutButton>
