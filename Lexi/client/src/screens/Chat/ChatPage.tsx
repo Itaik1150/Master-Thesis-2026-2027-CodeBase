@@ -13,6 +13,7 @@ import { getExperimentCoversationForms, getExperimentFeatures } from '../../DAL/
 import { ConversationForm } from '../../components/forms/conversation-form/ConversationForm';
 import { useExperimentId } from '../../hooks/useExperimentId';
 import { UserAnnotation } from '../../models/AppModels';
+import FontSizeSwitch from '@components/common/FontSizeSwitch';
 import { MainContainer, MessageListContainer, SectionContainer, SectionInnerContainer } from './ChatPage.s';
 import MessageList from './components/MessageList';
 import InputBox from './components/input-box/InputBox';
@@ -144,6 +145,11 @@ const ChatPage: React.FC<ChatPageProps> = ({ isFinishDialogOpen, setIsFinishDial
                                 experimentHasUserAnnotation={experimentFeatures?.userAnnotation}
                             />
                         </MessageListContainer>
+                        {isMobile && (
+                            <Grid item display="flex" justifyContent="flex-end" px={1} pb={0.5}>
+                                <FontSizeSwitch fontSize={messageFontSize} setFontSize={setMessageFontSize} />
+                            </Grid>
+                        )}
                         <Grid item display={'flex'} justifyContent={'center'}>
                             <InputBox
                                 isMobile={isMobile}
