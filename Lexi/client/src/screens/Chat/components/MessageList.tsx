@@ -19,20 +19,25 @@ const MessageList: React.FC<MessageListProps> = ({
     size,
     experimentHasUserAnnotation,
     handleUpdateUserAnnotation,
-}) => (
-    <Box height="100%" width={isMobile ? '100%' : '85%'} padding={2}>
-        {messages.map((message, index) => (
-            <Message
-                key={index}
-                message={message}
-                role={message.role}
-                size={size}
-                handleUpdateUserAnnotation={handleUpdateUserAnnotation}
-                experimentHasUserAnnotation={experimentHasUserAnnotation}
-            />
-        ))}
-        {isMessageLoading && <LoadingDots />}
-    </Box>
-);
+}) => {
+    const lastMessageIndex = messages.length - 1;
+    
+    return (
+        <Box height="100%" width={isMobile ? '100%' : '85%'} padding={2}>
+            {messages.map((message, index) => (
+                <Message
+                    key={index}
+                    message={message}
+                    role={message.role}
+                    size={size}
+                    handleUpdateUserAnnotation={handleUpdateUserAnnotation}
+                    experimentHasUserAnnotation={experimentHasUserAnnotation}
+                    isLastMessage={index === lastMessageIndex}
+                />
+            ))}
+            {isMessageLoading && <LoadingDots />}
+        </Box>
+    );
+};
 
 export default MessageList;

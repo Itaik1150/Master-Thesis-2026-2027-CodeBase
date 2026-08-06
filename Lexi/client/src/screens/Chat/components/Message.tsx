@@ -9,6 +9,7 @@ interface MessageProps {
     size?: 'sm' | 'lg';
     experimentHasUserAnnotation: boolean;
     handleUpdateUserAnnotation: (messageId, userAnnotation) => void;
+    isLastMessage?: boolean;
 }
 
 const Message: React.FC<MessageProps> = ({
@@ -17,6 +18,7 @@ const Message: React.FC<MessageProps> = ({
     message,
     role,
     handleUpdateUserAnnotation,
+    isLastMessage = false,
 }) => {
     const isUser = role === 'user';
 
@@ -63,7 +65,7 @@ const Message: React.FC<MessageProps> = ({
                         {getFormattedMessage(message.content)}
                     </Typography>
                 </Box>
-                {!isUser && experimentHasUserAnnotation && message._id && (
+                {!isUser && experimentHasUserAnnotation && message._id && isLastMessage && message.isProactiveOpener && (
                     <UserAnnotation
                         key={message._id}
                         message={message}

@@ -103,8 +103,12 @@ class ConversationsService {
             role: 'assistant',
             content: user.isAdmin ? agent.firstChatSentence : user.agent.firstChatSentence,
         };
+        
+        // Check if this conversation starts with a proactive opener
+        const hasProactiveOpener = !user.isAdmin && user.proactiveMemory?.injected_prompt_original;
+        
         await Promise.all([
-            this.createMessageDoc(firstMessage, res._id.toString(), 1),
+            this.createMessageDoc(firstMessage, res._id.toString(), 1, hasProactiveOpener),
             usersService.addConversation(userId),
             !user.isAdmin && experimentsService.addSession(experimentId),
         ]);
@@ -115,7 +119,7 @@ class ConversationsService {
     getConversation = async (conversationId: string, isLean = false): Promise<Message[]> => {
         const returnValues = isLean
             ? { _id: 0, role: 1, content: 1 }
-            : { _id: 1, role: 1, content: 1, userAnnotation: 1 };
+            : { _id: 1, role: 1, content: 1, userAnnotation: 1, isProactiveOpener: 1 };
 
         const conversation = await ConversationsModel.find({ conversationId }, returnValues);
 
@@ -213,15 +217,17 @@ class ConversationsService {
         message: Message,
         conversationId: string,
         messageNumber: number,
+        isProactiveOpener: boolean = false,
     ): Promise<Message> => {
         const res = await ConversationsModel.create({
             content: message.content,
             role: message.role,
             conversationId,
             messageNumber,
+            isProactiveOpener,
         });
 
-        return { _id: res._id, role: res.role, content: res.content, userAnnotation: res.userAnnotation };
+        return { _id: res._id, role: res.role, content: res.content, userAnnotation: res.userAnnotation, isProactiveOpener: res.isProactiveOpener };
     };
 
     private getChatRequest = (agent: IAgent, messages: Message[]) => {

@@ -5,6 +5,7 @@ export interface MessageType {
     role: 'system' | 'user' | 'assistant';
     content: string;
     userAnnotation?: UserAnnotation;
+    isProactiveOpener?: boolean;
 }
 
 export type UserAnnotation = 1 | 0 | -1;

@@ -22,4 +22,9 @@ export interface IUser {
     fcmTokenUpdatedAt?: Date;
     isProactive?: boolean;
     is_demo_finished?: boolean;
+    proactiveMemory?: {
+        injected_prompt_original?: string;
+        injected_prompt_reset_after?: Date;
+        [key: string]: any;
+    };
 }
