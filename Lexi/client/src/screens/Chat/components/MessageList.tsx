@@ -20,7 +20,8 @@ const MessageList: React.FC<MessageListProps> = ({
     experimentHasUserAnnotation,
     handleUpdateUserAnnotation,
 }) => {
-    const lastMessageIndex = messages.length - 1;
+    // Show feedback on first message if proactive, and user hasn't replied yet
+    const showFeedbackOnFirstMessage = messages.length === 1 && messages[0]?.isProactiveOpener;
     
     return (
         <Box height="100%" width={isMobile ? '100%' : '85%'} padding={2}>
@@ -32,7 +33,7 @@ const MessageList: React.FC<MessageListProps> = ({
                     size={size}
                     handleUpdateUserAnnotation={handleUpdateUserAnnotation}
                     experimentHasUserAnnotation={experimentHasUserAnnotation}
-                    isLastMessage={index === lastMessageIndex}
+                    showProactiveFeedback={index === 0 && showFeedbackOnFirstMessage}
                 />
             ))}
             {isMessageLoading && <LoadingDots />}

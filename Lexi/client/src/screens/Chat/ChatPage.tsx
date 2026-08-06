@@ -64,6 +64,8 @@ const ChatPage: React.FC<ChatPageProps> = ({ isFinishDialogOpen, setIsFinishDial
             }
             setConversationForms(conversationForms);
             setExperimentFeatures(experimentFeaturesRes);
+            console.log('[ChatPage] Loaded conversation:', conversation);
+            console.log('[ChatPage] First message isProactiveOpener:', conversation[0]?.isProactiveOpener);
             setMessages(conversation.length ? conversation : []);
             setIsPageLoading(false);
         } catch (err) {

@@ -9,7 +9,7 @@ interface MessageProps {
     size?: 'sm' | 'lg';
     experimentHasUserAnnotation: boolean;
     handleUpdateUserAnnotation: (messageId, userAnnotation) => void;
-    isLastMessage?: boolean;
+    showProactiveFeedback?: boolean;
 }
 
 const Message: React.FC<MessageProps> = ({
@@ -18,9 +18,19 @@ const Message: React.FC<MessageProps> = ({
     message,
     role,
     handleUpdateUserAnnotation,
-    isLastMessage = false,
+    showProactiveFeedback = false,
 }) => {
     const isUser = role === 'user';
+    
+    // Debug logging for proactive message detection
+    if (showProactiveFeedback) {
+        console.log('[Message] Proactive feedback check:', {
+            messageId: message._id,
+            isProactiveOpener: message.isProactiveOpener,
+            experimentHasUserAnnotation,
+            showProactiveFeedback
+        });
+    }
 
     const getFormattedMessage = (content) => {
         const parts = content
@@ -65,7 +75,7 @@ const Message: React.FC<MessageProps> = ({
                         {getFormattedMessage(message.content)}
                     </Typography>
                 </Box>
-                {!isUser && experimentHasUserAnnotation && message._id && isLastMessage && message.isProactiveOpener && (
+                {!isUser && experimentHasUserAnnotation && message._id && showProactiveFeedback && (
                     <UserAnnotation
                         key={message._id}
                         message={message}
