@@ -105,7 +105,7 @@ class ConversationsService {
         };
         
         // Check if this conversation starts with a proactive opener
-        const hasProactiveOpener = !user.isAdmin && user.proactiveMemory?.injected_prompt_original;
+        const hasProactiveOpener = !user.isAdmin && !!user.proactiveMemory?.injected_prompt_original;
         
         await Promise.all([
             this.createMessageDoc(firstMessage, res._id.toString(), 1, hasProactiveOpener),
