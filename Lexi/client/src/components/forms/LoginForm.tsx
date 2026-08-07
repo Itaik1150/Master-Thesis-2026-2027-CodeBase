@@ -82,10 +82,28 @@ export const LoginForm: React.FC<LoginFormProps> = ({ isAdminPage, experimentId 
                     }
                 }
                 
+                // Priority order for redirect destination:
+                // 1. returnTo URL parameter (from ProtectedRoute)
+                // 2. pendingConversationRedirect (backup from notification deep link)
+                // 3. Default: Admin dashboard or Experiment home
                 const returnTo = new URLSearchParams(location.search).get('returnTo');
-                const destination = returnTo
-                    ? decodeURIComponent(returnTo)
-                    : isAdminPage ? Pages.ADMIN : Pages.EXPERIMENT.replace(':experimentId', experimentId);
+                const pendingConversationId = sessionStorage.getItem('pendingConversationRedirect');
+                
+                let destination: string;
+                if (returnTo) {
+                    destination = decodeURIComponent(returnTo);
+                    console.log('[LoginForm] Redirecting to returnTo:', destination);
+                } else if (pendingConversationId && !isAdminPage) {
+                    destination = Pages.EXPERIMENT_CONVERSATION
+                        .replace(':experimentId', experimentId)
+                        .replace(':conversationId', pendingConversationId);
+                    sessionStorage.removeItem('pendingConversationRedirect');
+                    console.log('[LoginForm] Redirecting to pending conversation:', destination);
+                } else {
+                    destination = isAdminPage ? Pages.ADMIN : Pages.EXPERIMENT.replace(':experimentId', experimentId);
+                    console.log('[LoginForm] Redirecting to default:', destination);
+                }
+                
                 navigate(destination);
             }
         } catch (error) {

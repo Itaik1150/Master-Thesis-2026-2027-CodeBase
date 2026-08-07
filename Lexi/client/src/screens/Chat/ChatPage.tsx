@@ -53,6 +53,30 @@ const ChatPage: React.FC<ChatPageProps> = ({ isFinishDialogOpen, setIsFinishDial
     useEffectAsync(async () => {
         const preConversationFormAnsweredKey = `preConversationFormAnswered-${conversationId}`;
         const preConversationFormAnsweredKeyAnswered = sessionStorage.getItem(preConversationFormAnsweredKey);
+        
+        // Detect if we came from a notification
+        // Priority: Check Android bridge first, then fall back to first-view detection
+        let cameFromNotification = false;
+        
+        if (window.Android?.wasOpenedFromNotification) {
+            try {
+                cameFromNotification = window.Android.wasOpenedFromNotification();
+                console.log('[ChatPage] Android bridge reports notification:', cameFromNotification);
+            } catch (err) {
+                console.warn('[ChatPage] Error checking Android notification flag:', err);
+            }
+        }
+        
+        // Fallback: If conversation not previously viewed, likely from notification
+        const conversationViewKey = `conversationViewed-${conversationId}`;
+        const previouslyViewed = sessionStorage.getItem(conversationViewKey);
+        
+        if (!previouslyViewed || cameFromNotification) {
+            sessionStorage.setItem('fromNotification', 'true');
+            sessionStorage.setItem(conversationViewKey, 'true');
+            console.log('[ChatPage] Marking as from notification (Android:', cameFromNotification, ', FirstView:', !previouslyViewed, ')');
+        }
+        
         try {
             const [conversation, conversationForms, experimentFeaturesRes] = await Promise.all([
                 getConversation(conversationId),
@@ -66,6 +90,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ isFinishDialogOpen, setIsFinishDial
             setExperimentFeatures(experimentFeaturesRes);
             console.log('[ChatPage] Loaded conversation:', conversation);
             console.log('[ChatPage] First message isProactiveOpener:', conversation[0]?.isProactiveOpener);
+            console.log('[ChatPage] Full first message data:', JSON.stringify(conversation[0]));
             setMessages(conversation.length ? conversation : []);
             setIsPageLoading(false);
         } catch (err) {

@@ -20,8 +20,29 @@ const MessageList: React.FC<MessageListProps> = ({
     experimentHasUserAnnotation,
     handleUpdateUserAnnotation,
 }) => {
-    // Show feedback on first message if proactive, and user hasn't replied yet
-    const showFeedbackOnFirstMessage = messages.length === 1 && messages[0]?.isProactiveOpener;
+    // Multiple fallback checks to detect proactive opener:
+    // 1. Primary: Check isProactiveOpener flag
+    // 2. Fallback: If conversation has exactly 1 message and it's from assistant, 
+    //    and we came from a notification (check URL/sessionStorage)
+    const firstMessage = messages[0];
+    const isFirstMessageFromAssistant = firstMessage?.role === 'assistant';
+    const hasOnlyOneMessage = messages.length === 1;
+    
+    // Check if we came from a notification tap (set by deep link handler)
+    const cameFromNotification = sessionStorage.getItem('fromNotification') === 'true';
+    
+    const showFeedbackOnFirstMessage = 
+        hasOnlyOneMessage && 
+        isFirstMessageFromAssistant && 
+        (firstMessage?.isProactiveOpener === true || cameFromNotification);
+    
+    console.log('[MessageList] Proactive detection:', {
+        hasOnlyOneMessage,
+        isFirstMessageFromAssistant,
+        isProactiveOpenerFlag: firstMessage?.isProactiveOpener,
+        cameFromNotification,
+        showFeedback: showFeedbackOnFirstMessage
+    });
     
     return (
         <Box height="100%" width={isMobile ? '100%' : '85%'} padding={2}>

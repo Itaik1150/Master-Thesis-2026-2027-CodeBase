@@ -42,6 +42,20 @@ const Home: React.FC = () => {
     const [experimentContent, setExperimentContent] = useState<any>(null);
 
     useEffectAsync(async () => {
+        // Check if we have a pending conversation redirect from notification
+        const pendingConversationId = sessionStorage.getItem('pendingConversationRedirect');
+        if (pendingConversationId && !activeUser?.isAdmin) {
+            console.log('[Home] Found pending conversation redirect:', pendingConversationId);
+            sessionStorage.removeItem('pendingConversationRedirect');
+            navigate(
+                `${Pages.EXPERIMENT_CONVERSATION.replace(':experimentId', experimentId).replace(
+                    ':conversationId',
+                    pendingConversationId,
+                )}`,
+            );
+            return;
+        }
+        
         try {
             const { content, isActive } = await getExperimentContent(experimentId);
             setExperimentContent(content);

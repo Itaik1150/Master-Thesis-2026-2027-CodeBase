@@ -46,7 +46,9 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         val deepLinkUrl = intent.getStringExtra("deepLinkUrl")
         if (!deepLinkUrl.isNullOrEmpty()) {
-            android.util.Log.d("Lexi", "onNewIntent: navigating to $deepLinkUrl")
+            // Mark that we opened from notification (for React app to check)
+            prefs.edit().putBoolean("openedFromNotification", true).apply()
+            android.util.Log.d("Lexi", "onNewIntent: navigating to $deepLinkUrl (from notification)")
             activeWebView?.loadUrl(deepLinkUrl)
         }
     }
@@ -76,6 +78,10 @@ class MainActivity : ComponentActivity() {
         // Also restore the base experiment URL from the deep link so future
         // regular launches (without a notification) still work correctly.
         if (!deepLinkUrl.isNullOrEmpty()) {
+            // Mark that we opened from notification (for React app to check)
+            prefs.edit().putBoolean("openedFromNotification", true).apply()
+            android.util.Log.d("Lexi", "onCreate: Opened from notification with URL: $deepLinkUrl")
+            
             // Extract base experiment URL: everything up to and including /e/:id
             // e.g. https://host/e/abc123/c/def456  →  https://host/e/abc123
             val baseUrl = Regex("(https?://[^/]+/e/[a-fA-F0-9]{24})").find(deepLinkUrl)?.groupValues?.get(1)

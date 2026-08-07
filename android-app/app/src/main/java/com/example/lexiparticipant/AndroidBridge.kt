@@ -124,4 +124,21 @@ class AndroidBridge(private val context: Context) {
             put("sdk", android.os.Build.VERSION.SDK_INT)
         }.toString()
     }
+    
+    @JavascriptInterface
+    fun setOpenedFromNotification(value: Boolean) {
+        sharedPreferences.edit().putBoolean("openedFromNotification", value).apply()
+        Log.d("AndroidBridge", "Set openedFromNotification: $value")
+    }
+    
+    @JavascriptInterface
+    fun wasOpenedFromNotification(): Boolean {
+        val wasOpened = sharedPreferences.getBoolean("openedFromNotification", false)
+        // Clear the flag after reading so it doesn't persist
+        if (wasOpened) {
+            sharedPreferences.edit().putBoolean("openedFromNotification", false).apply()
+        }
+        Log.d("AndroidBridge", "Was opened from notification: $wasOpened")
+        return wasOpened
+    }
 }

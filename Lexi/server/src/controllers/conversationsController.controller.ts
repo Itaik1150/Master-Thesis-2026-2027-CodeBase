@@ -124,6 +124,12 @@ class ConvesationsController {
         }
 
         const conversation = await conversationsService.getConversation(conversationId);
+        
+        // Add debug logging to verify isProactiveOpener is being sent
+        if (conversation.length > 0) {
+            console.log(`[getConversation] Returning ${conversation.length} messages. First message isProactiveOpener:`, conversation[0].isProactiveOpener);
+        }
+        
         res.status(200).send(conversation);
     });
 

@@ -12,6 +12,8 @@ declare global {
       isTokenAvailable: () => boolean;
       getDeviceInfo: () => string;
       setCurrentUserId: (userId: string) => void;
+      wasOpenedFromNotification: () => boolean;
+      setOpenedFromNotification: (value: boolean) => void;
     };
   }
 }
