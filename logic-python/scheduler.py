@@ -241,15 +241,40 @@ def ai_daily_planner_job(scheduler: BlockingScheduler, experiment_id: str, windo
 
     Uses the 'ai_timed_' job-id prefix so the hourly reload_schedules pass does NOT
     accidentally remove these ephemeral same-day jobs.
+    
+    Respects maxDailyNotifications: caps count to the experiment's daily limit to
+    avoid scheduling more notifications than allowed.
     """
     tz = ZoneInfo("Asia/Jerusalem")
     now_tz   = datetime.now(tz)
     now_str  = now_tz.strftime("%H:%M:%S")
     window_start = window.get("start", "16:00")
     window_end   = window.get("end",   "20:00")
+    
+    # Load maxDailyNotifications from experiment settings and cap count if needed
+    effective_count = count
+    try:
+        if mongodb_client.connect():
+            exp_doc = mongodb_client.db["experiments"].find_one(
+                {"_id": ObjectId(experiment_id)},
+                {"experimentFeatures.proactiveSettings.maxDailyNotifications": 1}
+            )
+            if exp_doc:
+                ps = (exp_doc.get("experimentFeatures") or {}).get("proactiveSettings") or {}
+                max_daily = ps.get("maxDailyNotifications")
+                if max_daily and max_daily > 0 and max_daily < count:
+                    effective_count = max_daily
+                    print(f"   ⚠️  Count capped to maxDailyNotifications: {count} → {effective_count}")
+    except Exception as e:
+        print(f"   ⚠️  Could not load maxDailyNotifications for experiment {experiment_id[:8]}: {e}")
+    finally:
+        try:
+            mongodb_client.disconnect()
+        except Exception:
+            pass
 
     print(f"\n🤖 [{now_str}] AI daily planner — experiment {experiment_id[:8]} "
-          f"window={window_start}–{window_end} count={count}")
+          f"window={window_start}–{window_end} count={effective_count}")
 
     try:
         users = _get_experiment_users(experiment_id)
@@ -264,7 +289,7 @@ def ai_daily_planner_job(scheduler: BlockingScheduler, experiment_id: str, windo
             user_id  = str(user["_id"])
             username = user.get("username", "Unknown")
             try:
-                planned_times = rs.plan_ai_schedule(user, window_start, window_end, count)
+                planned_times = rs.plan_ai_schedule(user, window_start, window_end, effective_count)
                 for t_str in planned_times:
                     h, m = map(int, t_str.split(":"))
                     run_dt = now_tz.replace(hour=h, minute=m, second=0, microsecond=0)
