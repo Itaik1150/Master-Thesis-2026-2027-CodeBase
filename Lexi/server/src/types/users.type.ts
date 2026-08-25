@@ -25,6 +25,16 @@ export interface IUser {
     proactiveMemory?: {
         injected_prompt_original?: string;
         injected_prompt_reset_after?: Date;
+        linked_memory_id?: string;
+        linked_conversation_id?: string;
+        emotional_memories?: Array<{
+            memory_id: string;
+            content: string;
+            affective_score: number;
+            conversationId: string;
+            timestamp_iso: string;
+            used: boolean;
+        }>;
         [key: string]: any;
     };
 }

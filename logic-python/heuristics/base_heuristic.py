@@ -105,6 +105,8 @@ class BaseHeuristic(ABC):
         # research_service can include them in the proactive_logs document.
         self.used_fallback: bool = False  # True when cold-start / fallback path taken
         self.memory_content: str = ""     # snippet of memory that drove the message
+        self.linked_memory_id: str = None  # ID of specific memory/event used (for context injection)
+        self.linked_conversation_id: str = None  # conversation where memory originated
 
     # ── Convenience properties ─────────────────────────────────────────────────
 

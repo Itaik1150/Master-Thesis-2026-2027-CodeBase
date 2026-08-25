@@ -54,6 +54,7 @@ class AffectiveHeuristic(BaseHeuristic):
     )
 
     # Task 6.5: structural part — injected by _safe_memory_prompt(), never shown in UI.
+    # Note: conversationId, timestamp_iso, and used are added automatically by Python code.
     MEMORY_SCHEMA: str = (
         "For each genuine emotional share, produce an object with:\n"
         '  "content":        exact quote or close paraphrase of the emotional share\n'
@@ -171,8 +172,9 @@ class AffectiveHeuristic(BaseHeuristic):
                             "memory_id":       str(_ObjectId()),  # Unique ID for surgical mark-as-used
                             "content":         content,
                             "affective_score": max(1, min(10, int(item.get("affective_score") or 1))),
-                            "timestamp_iso":   item.get("timestamp_iso") or today_iso,
-                            "used":            False,
+                            "conversationId":  conv_id,  # Added automatically: source conversation
+                            "timestamp_iso":   today_iso,  # Added automatically: extraction time
+                            "used":            False,  # Added automatically: tracking field
                         })
             except Exception as e:
                 print(f"⚠️  AffectiveHeuristic.create_memory LLM ({self.username}): {e}")
@@ -257,6 +259,9 @@ class AffectiveHeuristic(BaseHeuristic):
             # Task 6.7: record which memory drove this message
             self.memory_content = content[:120]
             self.used_fallback  = False
+            # Task 6.9: capture memory ID and source conversation for context injection
+            self.linked_memory_id = best.get("memory_id")
+            self.linked_conversation_id = best.get("conversationId")
 
             system = self._safe_message_prompt(self.message_prompt)
             user_content = (

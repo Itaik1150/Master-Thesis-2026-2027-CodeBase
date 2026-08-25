@@ -35,7 +35,12 @@ class ConversationsService {
             usersService.resetInjectedPromptIfNeeded(metadataConversation.userId.toString()).catch(() => {});
         }
 
-        const messages: any[] = this.getConversationMessages(metadataConversation.agent, conversation, message);
+        const messages: any[] = await this.getConversationMessages(
+            metadataConversation.agent,
+            conversation,
+            message,
+            metadataConversation.userId?.toString(),
+        );
         const chatRequest = this.getChatRequest(metadataConversation.agent, messages);
         await this.createMessageDoc(message, conversationId, conversation.length + 1);
 
@@ -196,8 +201,24 @@ class ConversationsService {
         }
     };
 
-    private getConversationMessages = (agent: IAgent, conversation: Message[], message: Message) => {
-        const systemPrompt = { role: 'system', content: agent.systemStarterPrompt };
+    private getConversationMessages = async (
+        agent: IAgent,
+        conversation: Message[],
+        message: Message,
+        userId?: string,
+    ) => {
+        let systemPrompt = { role: 'system', content: agent.systemStarterPrompt };
+
+        // Task 6.9: If this is a proactive-triggered chat, inject source context
+        // Check if: (1) we have a userId, (2) this is the first user message (conversation has only the opener)
+        // (3) the opener is marked as proactive
+        if (userId && conversation.length === 1 && conversation[0].isProactiveOpener) {
+            const context = await this.getProactiveContext(userId);
+            if (context) {
+                systemPrompt.content += `\n\n[Context: This conversation was initiated based on something the user shared earlier: "${context.memory}". Here's relevant context from a previous conversation:\n${context.snippet}\n\nReference this naturally if the user engages with the topic.]`;
+            }
+        }
+
         const beforeUserMessage = { role: 'system', content: agent.beforeUserSentencePrompt };
         const afterUserMessage = { role: 'system', content: agent.afterUserSentencePrompt };
 
@@ -211,6 +232,47 @@ class ConversationsService {
         ];
 
         return messages;
+    };
+
+    private getProactiveContext = async (userId: string) => {
+        try {
+            const user = await usersService.getUserById(userId);
+            const memoryId = user.proactiveMemory?.linked_memory_id;
+            const sourceConvId = user.proactiveMemory?.linked_conversation_id;
+
+            if (!sourceConvId) return null;
+
+            // Fetch the original conversation snippet (last 5 user messages)
+            const sourceMessages = await ConversationsModel.find(
+                { conversationId: sourceConvId, role: 'user' },
+                { content: 1, _id: 0 },
+            )
+                .sort({ messageNumber: -1 })
+                .limit(5)
+                .lean();
+
+            if (!sourceMessages || sourceMessages.length === 0) return null;
+
+            const snippet = sourceMessages
+                .reverse()
+                .map((m) => m.content)
+                .join('\n');
+
+            // Find the specific memory content (for affective heuristic)
+            let memoryContent = '';
+            if (memoryId && user.proactiveMemory?.emotional_memories) {
+                const memory = user.proactiveMemory.emotional_memories.find((m) => m.memory_id === memoryId);
+                memoryContent = memory?.content || '';
+            }
+
+            return {
+                memory: memoryContent || 'a topic they shared',
+                snippet: snippet.substring(0, 500), // Limit context size
+            };
+        } catch (error) {
+            console.error('[getProactiveContext] Error:', error);
+            return null;
+        }
     };
 
     private createMessageDoc = async (

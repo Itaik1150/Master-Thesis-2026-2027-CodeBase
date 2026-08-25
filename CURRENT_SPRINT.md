@@ -13,5 +13,5 @@
 - [ ] **2.3 Pre/Post Questionnaires:** Verify the app serves the assigned forms (FormsModel/FormsRouter) to users at correct intervals.
 
 ## Phase 3: UI/UX & Polish
-- [ ] **3.1 Adjust Mobile Chat UI:** Reduce the chat text/UI size on mobile devices, or implement a settings toggle allowing the user to adjust the size themselves.
+- [x] **3.1 Adjust Mobile Chat UI:** Reduce the chat text/UI size on mobile devices, or implement a settings toggle allowing the user to adjust the size themselves.
 - [ ] **1.2 Update Opening Prompt:** Change and refine the initial opening prompt for the agent.

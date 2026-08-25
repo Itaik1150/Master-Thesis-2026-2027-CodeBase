@@ -61,6 +61,7 @@ class BehaviouralGapHeuristic(BaseHeuristic):
     )
 
     # Task 6.5: structural part — injected by _safe_memory_prompt(), never shown in UI.
+    # Note: conversationId, timestamp_iso, and checked are added automatically by Python code.
     MEMORY_SCHEMA: str = (
         'Schema: {"intents": [{"intent": "concise English description"}]}\n'
         'Return {"intents": []} if no clear commitments are found.'
@@ -160,9 +161,12 @@ class BehaviouralGapHeuristic(BaseHeuristic):
                 for item in intents_raw:
                     text = (item.get("intent") or "").strip()
                     if text and text.lower() not in existing_texts:
-                        new_intents.append(
-                            {"intent": text, "stated_at": now_iso, "checked": False}
-                        )
+                        new_intents.append({
+                            "intent":          text,
+                            "conversationId":  conv_id,  # Added automatically: source conversation
+                            "stated_at":       now_iso,  # Added automatically: extraction time
+                            "checked":         False,  # Added automatically: tracking field
+                        })
                         existing_texts.add(text.lower())
                 newly_scanned_ids.append(conv_id)
                 if intents_raw:
@@ -207,6 +211,8 @@ class BehaviouralGapHeuristic(BaseHeuristic):
                     "stated_at":   intent["stated_at"],
                 }
                 indices_to_mark.append(idx)
+                # Task 6.9: capture source conversation for context injection
+                self.linked_conversation_id = intent.get("conversationId")
                 break
 
             try:
@@ -215,12 +221,14 @@ class BehaviouralGapHeuristic(BaseHeuristic):
                 )
                 outcome = result.get("outcome", "unknown")
                 indices_to_mark.append(idx)
-                if outcome == "unknown":
-                    pending_gap = {
-                        "intent_text": intent["intent"],
-                        "stated_at":   intent["stated_at"],
-                    }
-                    break
+            if outcome == "unknown":
+                pending_gap = {
+                    "intent_text": intent["intent"],
+                    "stated_at":   intent["stated_at"],
+                }
+                # Task 6.9: capture source conversation for context injection
+                self.linked_conversation_id = intent.get("conversationId")
+                break
             except Exception as e:
                 print(f"⚠️  BehaviouralGapHeuristic completion check ({self.username}): {e}")
 

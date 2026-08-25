@@ -52,6 +52,7 @@ class TemporalHeuristic(BaseHeuristic):
     )
 
     # Task 6.5: structural part — injected by _safe_memory_prompt(), never shown in UI.
+    # Note: conversationId and timestamp_iso are added automatically by Python code.
     # {today_iso} is substituted at runtime in create_memory() after assembly.
     MEMORY_SCHEMA: str = (
         "Today is {today_iso}. Resolve all relative dates against today.\n\n"
@@ -153,8 +154,10 @@ class TemporalHeuristic(BaseHeuristic):
                     text_val = (item.get("text") or "").strip()
                     if text_val:
                         new_mentions.append({
-                            "text":     text_val,
-                            "when_iso": item.get("when_iso"),
+                            "text":            text_val,
+                            "when_iso":        item.get("when_iso"),
+                            "conversationId":  conv_id,  # Added automatically: source conversation
+                            "timestamp_iso":   today_iso,  # Added automatically: extraction time
                         })
         except Exception as e:
             print(f"⚠️  TemporalHeuristic.create_memory LLM ({self.username}): {e}")
@@ -242,6 +245,8 @@ class TemporalHeuristic(BaseHeuristic):
                     "when_iso":     str(when_iso),
                     "hours_until":  hours_until,
                 }
+                # Task 6.9: capture source conversation for context injection
+                self.linked_conversation_id = mention.get("conversationId")
                 break
 
         if not self._fired_nudge:

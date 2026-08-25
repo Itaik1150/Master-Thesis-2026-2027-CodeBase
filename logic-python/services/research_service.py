@@ -29,11 +29,14 @@ class ResearchService:
         self.fcm_service = FCMService(dry_run=False)
         self.llm_service = ProactiveLogic()
 
-    def inject_prompt(self, user_id: str, message: str) -> bool:
+    def inject_prompt(self, user_id: str, message: str, linked_memory_id: str = None, linked_conversation_id: str = None) -> bool:
         """
         Overwrite agent.firstChatSentence with the proactive message.
         Saves the original sentence in proactiveMemory.injected_prompt_original
         so it can be restored when the user replies (see Node.js resetInjectedPromptIfNeeded).
+
+        Task 6.9: Also stores linked_memory_id and linked_conversation_id so the chat
+        system can inject source context when the user engages with the proactive opener.
 
         There is NO time-based expiry — the injected prompt persists until the user
         actually opens the app and sends a message.  A new injection from a later cycle
@@ -59,12 +62,19 @@ class ResearchService:
             agent_sentence = (user.get("agent") or {}).get("firstChatSentence") or ""
             original = existing_original or agent_sentence or self.DEFAULT_GREETING
 
+            update_fields = {
+                "agent.firstChatSentence": message,
+                "proactiveMemory.injected_prompt_original": original,
+            }
+            # Task 6.9: store memory/conversation linkage for context injection
+            if linked_memory_id:
+                update_fields["proactiveMemory.linked_memory_id"] = linked_memory_id
+            if linked_conversation_id:
+                update_fields["proactiveMemory.linked_conversation_id"] = linked_conversation_id
+
             mongodb_client.db[mongodb_client.users_collection].update_one(
                 {"_id": ObjectId(user_id)},
-                {"$set": {
-                    "agent.firstChatSentence": message,
-                    "proactiveMemory.injected_prompt_original": original,
-                }},
+                {"$set": update_fields},
             )
             return True
 
@@ -518,7 +528,12 @@ class ResearchService:
             try:
                 from core.models import UserContext
 
-                injection_result = self.inject_prompt(user_id, message["generated_message"])
+                injection_result = self.inject_prompt(
+                    user_id,
+                    message["generated_message"],
+                    linked_memory_id=heuristic.linked_memory_id if heuristic else None,
+                    linked_conversation_id=heuristic.linked_conversation_id if heuristic else None,
+                )
                 if injection_result:
                     results["injected"] += 1
                     print(f"💬 Message injected for {username}")
