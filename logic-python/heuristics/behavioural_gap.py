@@ -221,14 +221,14 @@ class BehaviouralGapHeuristic(BaseHeuristic):
                 )
                 outcome = result.get("outcome", "unknown")
                 indices_to_mark.append(idx)
-            if outcome == "unknown":
-                pending_gap = {
-                    "intent_text": intent["intent"],
-                    "stated_at":   intent["stated_at"],
-                }
-                # Task 6.9: capture source conversation for context injection
-                self.linked_conversation_id = intent.get("conversationId")
-                break
+                if outcome == "unknown":
+                    pending_gap = {
+                        "intent_text": intent["intent"],
+                        "stated_at":   intent["stated_at"],
+                    }
+                    # Task 6.9: capture source conversation for context injection
+                    self.linked_conversation_id = intent.get("conversationId")
+                    break
             except Exception as e:
                 print(f"⚠️  BehaviouralGapHeuristic completion check ({self.username}): {e}")
 
